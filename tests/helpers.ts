@@ -49,11 +49,17 @@ export async function materialize(src: string): Promise<string> {
 }
 
 /** Run one scanner over tests/fixtures/<ruleId>/<variant> and keep that rule's findings. */
-export async function scanFixture(scanner: Scanner, ruleId: string, variant: 'bad' | 'clean'): Promise<Finding[]> {
+export async function scanFixture(
+  scanner: Scanner,
+  ruleId: string,
+  variant: 'bad' | 'clean',
+  options?: Record<string, unknown>,
+): Promise<Finding[]> {
   const root = await materialize(fixture(ruleId, variant));
   const result = await runScanner(scanner, {
     provider: createNodeProvider(root),
     config: DEFAULT_CONFIG,
+    options,
   });
   return result.findings.filter((f) => f.ruleId === ruleId);
 }

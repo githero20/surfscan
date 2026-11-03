@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "dependencies": {
+    "real-package": "1.0.0",
+    "local-a": "workspace:*",
+    "local-b": "file:../local-b",
+    "from-git": "git+https://example.test/x.git",
+    "from-github": "example/thing",
+    "from-url": "https://example.test/x.tgz"
+  }
+}

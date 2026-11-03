@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "made-up-package": "^1.0.0",
+    "gone-package": "^1.0.0",
+    "real-package": "9.9.9"
+  }
+}
