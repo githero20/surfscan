@@ -242,26 +242,24 @@ Built as adapters, one per agent. The first adapter reads Claude Code's `.claude
 
 ### APPR-001 (high): bypass or auto-approve mode enabled
 
-**Risk.** In bypass mode the agent runs every tool call without a prompt, including writes to `.git` and `.claude`. Any injected instruction runs immediately.
+**Risk.** In bypass mode the agent runs every tool call without a prompt, including writes to `.git` and `.claude`. In auto mode a classifier approves actions instead of a person. Either way, an injected instruction can run with no human review.
 
 **Bad.**
 ```json
 { "permissions": { "defaultMode": "bypassPermissions" } }
+{ "permissions": { "defaultMode": "auto" } }
 { "skipDangerousModePermissionPrompt": true }
 ```
 
-**Fix.** Remove the setting. Use bypass mode only for a single session inside an isolated container.
+**Fix.** Remove the setting from shared project files. Use these modes only for a single session inside an isolated container.
 
 **Detection.** The rule flags:
-- `permissions.defaultMode` set to `bypassPermissions`
+- `permissions.defaultMode` set to `bypassPermissions` or `auto`
 - `skipDangerousModePermissionPrompt: true`
 
-Since Claude Code v2.1.257, bypass mode in project or local settings has no effect. surfscan still reports it, because older versions honor it and the setting shows intent.
+Since Claude Code v2.1.257, `bypassPermissions` and `auto` in project or local settings have no effect. surfscan still reports them, because older versions honor them and the setting shows intent.
 
-Not flagged:
-- **`auto` mode:** a classifier reviews actions.
-- **`acceptEdits`:** approves file edits only.
-- **`dontAsk`:** denies rather than approves.
+`acceptEdits` is reported by APPR-005. `plan` and `dontAsk` are not flagged, because `dontAsk` denies rather than approves.
 
 ### APPR-002 (high): allowlist includes destructive commands
 
@@ -301,9 +299,14 @@ Not flagged:
 **Detection.** A `Bash` or `PowerShell` allow rule is flagged when it is:
 - a bare `Bash` or `PowerShell`, or contains only wildcards (`Bash(*)`)
 - a pattern that starts with `*`, which matches any program (`Bash(* --version)` matches `bash -c '...' --version`)
-- a shell or launcher followed by a wildcard: `sh`, `bash`, `zsh`, `pwsh`, `cmd`, `sudo`, `eval`, `exec`, `env`, `xargs` and similar
+- one of the following followed by a wildcard, optionally with its eval flag (`-c`, `-e`, `--eval`):
+  - **Shells and launchers:** `sh`, `bash`, `zsh`, `pwsh`, `cmd`, `sudo`, `eval`, `exec`, `env`, `xargs` and similar
+  - **Language runtimes:** `python`, `node`, `deno`, `bun`, `ruby`, `perl`, `php`
+  - **Package runners:** `npx`, `bunx`, `uvx`, `pipx run`
 
-Language runtimes such as `python *` or `node *` are not flagged, although they can run arbitrary code. A bare `*` tool glob is ignored, because Claude Code skips unanchored allow globs.
+  For example, `Bash(python *)`, `Bash(node -e *)` and `Bash(npx *)` are all flagged.
+
+A runtime pinned to one script or module, such as `Bash(node scripts/build.js)` or `Bash(python -m pytest *)`, is not flagged. A bare `*` tool glob is ignored, because Claude Code skips unanchored allow globs.
 
 ### APPR-004 (medium): all project MCP servers or tools auto-approved
 
@@ -321,3 +324,16 @@ Language runtimes such as `python *` or `node *` are not flagged, although they 
 - allow rules of the form `mcp__<server>` or `mcp__<server>__*`
 
 `mcp__*` is not flagged, because Claude Code ignores it as an allow rule.
+
+### APPR-005 (medium): file edits auto-approved
+
+**Risk.** In `acceptEdits` mode the agent edits files and runs common filesystem commands (`mkdir`, `touch`, `mv`, `cp`) in the working directory without asking. It cannot run arbitrary shell commands, but it can rewrite code, configs and instruction files without anyone reviewing the change first. When the mode sits in a shared project file, it applies to everyone who clones the repo.
+
+**Bad.**
+```json
+{ "permissions": { "defaultMode": "acceptEdits" } }
+```
+
+**Fix.** Keep the default mode in shared project settings. Let each developer opt in for their own session.
+
+**Detection.** Flags `permissions.defaultMode` set to `acceptEdits`. This rule was added after review; it is medium because edits stay inside the working directory and remain visible in version control.

@@ -3,6 +3,8 @@
     "allow": [
       "Bash(npm run *)",
       "Bash(ls *)",
+      "Bash(node scripts/build.js)",
+      "Bash(python -m pytest *)",
       "WebFetch(domain:docs.example.com)",
       "*"
     ],

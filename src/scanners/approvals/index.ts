@@ -137,6 +137,24 @@ export const rules: Rule[] = [
       return out;
     },
   },
+  {
+    id: 'APPR-005',
+    severity: 'medium',
+    title: 'File edits auto-approved',
+    check(context) {
+      return settingsFor(context).flatMap((s) =>
+        s.partial.map((p) =>
+          finding(
+            this,
+            s.file,
+            p.line,
+            `${s.agent} approves some actions without asking: ${p.value}`,
+            'use the default mode in shared project settings; let each developer opt in for their own session',
+          ),
+        ),
+      );
+    },
+  },
 ];
 
 export const approvalsScanner: Scanner = {

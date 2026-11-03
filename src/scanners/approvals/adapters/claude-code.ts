@@ -11,7 +11,8 @@
  * - permissions.defaultMode: default | acceptEdits | plan | auto | dontAsk |
  *   bypassPermissions. Since v2.1.257, `auto` and `bypassPermissions` no
  *   longer take effect from project or local settings, but older versions
- *   honour them, so they are still reported.
+ *   honour them, so they are still reported (APPR-001). `acceptEdits`
+ *   approves file edits and common filesystem commands (APPR-005).
  * - skipDangerousModePermissionPrompt: skips the confirmation before
  *   bypassPermissions mode.
  * - enableAllProjectMcpServers: approves every server in project .mcp.json.
@@ -25,7 +26,10 @@ import { JsonLocator } from '../../shared-json.js';
 import type { AllowEntry, ApprovalAdapter, ApprovalSettings } from '../types.js';
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
-const BYPASS_MODES = new Set(['bypassPermissions']);
+/** Modes where no human approves tool calls. */
+const BYPASS_MODES = new Set(['bypassPermissions', 'auto']);
+/** Modes that approve file edits without asking. */
+const PARTIAL_MODES = new Set(['acceptEdits']);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -76,6 +80,7 @@ export const claudeCodeAdapter: ApprovalAdapter = {
       agent: this.agent,
       file: file.path,
       bypass: [],
+      partial: [],
       allow: [],
       allMcpServers: [],
     };
@@ -87,6 +92,11 @@ export const claudeCodeAdapter: ApprovalAdapter = {
     if (typeof mode === 'string' && BYPASS_MODES.has(mode)) {
       settings.bypass.push({
         value: `permissions.defaultMode is "${mode}" (ignored from project files since v2.1.257, honoured by older versions)`,
+        line: loc.key('defaultMode', permOffset),
+      });
+    } else if (typeof mode === 'string' && PARTIAL_MODES.has(mode)) {
+      settings.partial.push({
+        value: `permissions.defaultMode is "${mode}" (file edits and filesystem commands run without asking)`,
         line: loc.key('defaultMode', permOffset),
       });
     }

@@ -6,7 +6,10 @@
       "Bash(bash -c *)",
       "PowerShell(*)",
       "Bash(* --version)",
-      "Bash(sudo *)"
+      "Bash(sudo *)",
+      "Bash(python *)",
+      "Bash(node -e *)",
+      "Bash(npx *)"
     ]
   }
 }

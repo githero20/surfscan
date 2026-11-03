@@ -27,6 +27,8 @@ export interface ApprovalSettings {
   /** Modes or flags that skip permission prompts entirely. */
   bypass: Array<Located<string>>;
   allow: AllowEntry[];
+  /** Modes that auto-approve some actions, such as file edits. */
+  partial: Array<Located<string>>;
   /** Settings that auto-approve every project MCP server. */
   allMcpServers: Array<Located<string>>;
 }

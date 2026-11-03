@@ -17,12 +17,17 @@ describe('approvals scanner', () => {
   });
 
   describe('APPR-001', () => {
-    it('APPR-001 flags bypassPermissions mode and the skipped confirmation', async () => {
+    it('APPR-001 flags bypassPermissions and auto modes and the skipped confirmation', async () => {
       const findings = await scan('APPR-001', 'bad');
-      expect(where(findings)).toEqual(['.claude/settings.json:3', '.claude/settings.local.json:2']);
+      expect(where(findings)).toEqual([
+        '.claude/settings.json:3',
+        '.claude/settings.local.json:2',
+        'packages/app/.claude/settings.json:3',
+      ]);
+      expect(findings[2]!.message).toContain('"auto"');
     });
 
-    it('APPR-001 accepts other modes', async () => {
+    it('APPR-001 accepts plan mode and a disabled bypass mode', async () => {
       expect(await scan('APPR-001', 'clean')).toEqual([]);
     });
   });
@@ -40,12 +45,12 @@ describe('approvals scanner', () => {
   });
 
   describe('APPR-003', () => {
-    it('APPR-003 flags rules that allow any shell command', async () => {
+    it('APPR-003 flags rules that allow any shell command or any code', async () => {
       const findings = await scan('APPR-003', 'bad');
-      expect(findings.map((f) => f.line)).toEqual([4, 5, 6, 7, 8, 9]);
+      expect(findings.map((f) => f.line)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
     });
 
-    it('APPR-003 ignores scoped rules, deny rules and unanchored globs', async () => {
+    it('APPR-003 ignores scoped rules, fixed scripts, deny rules and unanchored globs', async () => {
       expect(await scan('APPR-003', 'clean')).toEqual([]);
     });
   });
@@ -58,6 +63,18 @@ describe('approvals scanner', () => {
 
     it('APPR-004 accepts per-server approval and single-tool rules', async () => {
       expect(await scan('APPR-004', 'clean')).toEqual([]);
+    });
+  });
+
+  describe('APPR-005', () => {
+    it('APPR-005 flags acceptEdits mode', async () => {
+      const findings = await scan('APPR-005', 'bad');
+      expect(where(findings)).toEqual(['.claude/settings.json:3']);
+      expect(findings[0]!.severity).toBe('medium');
+    });
+
+    it('APPR-005 accepts the default mode', async () => {
+      expect(await scan('APPR-005', 'clean')).toEqual([]);
     });
   });
 

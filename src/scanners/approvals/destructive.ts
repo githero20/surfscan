@@ -60,11 +60,14 @@ export function patternToRegex(pattern: string): RegExp {
   return new RegExp(`^${p.split('*').map(escape).join('[\\s\\S]*')}$`);
 }
 
-/** Launchers that run any command given to them. */
+/**
+ * Shells, launchers, language runtimes and package runners. Each runs any
+ * command or code given to it, so `<launcher> *` allows anything.
+ */
 const LAUNCHERS =
-  /^(?:sudo|doas|sh|bash|zsh|fish|dash|ksh|pwsh|powershell(?:\.exe)?|cmd(?:\.exe)?|eval|exec|env|xargs|nohup|command|builtin|nice|timeout|watch)(?:\s+(?:-c|\/c|-Command|-e))?\s*(?::\*|\*|\s\*)$/i;
+  /^(?:sudo|doas|sh|bash|zsh|fish|dash|ksh|pwsh|powershell(?:\.exe)?|cmd(?:\.exe)?|eval|exec|env|xargs|nohup|command|builtin|nice|timeout|watch|python[0-9.]*|py|node|deno|bun|ruby|perl|php|lua|Rscript|osascript|npx|bunx|uvx|pipx\s+run)(?:\s+(?:-c|\/c|-Command|-e|--eval|run))?\s*(?::\*|\*|\s\*)$/i;
 
-/** True when the pattern allows any command: `*`, a leading `*`, or a shell launcher with a wildcard. */
+/** True when the pattern allows any command: `*`, a leading `*`, or a launcher with a wildcard. */
 export function isWildcardShell(command: string | undefined): boolean {
   if (command === undefined) return true;
   const c = command.trim();
