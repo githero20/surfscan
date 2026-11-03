@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# Keep fixtures byte-exact (invisible characters, line endings) on every platform.
+# Later lines win, so this must stay below the default.
+tests/fixtures/** -text

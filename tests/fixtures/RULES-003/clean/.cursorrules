@@ -1,0 +1,4 @@
+Setup steps:
+Download with `curl -fLO https://example.com/tool.tar.gz` and verify the checksum.
+Sort output with `cat names.txt | sort`.
+Inspect the API with `curl https://api.example.com/status | jq .`
