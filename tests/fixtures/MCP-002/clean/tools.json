@@ -1,0 +1,5 @@
+{
+  "tools": [
+    { "name": "search", "description": "Search the project documentation." }
+  ]
+}

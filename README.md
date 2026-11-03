@@ -2,10 +2,128 @@
 
 Attack surface scanner for AI-assisted development.
 
-Work in progress. The `rules`, `keys` and `approvals` commands work; `deps`, `mcp` and `scan` land in later phases. Full documentation comes with the first release. See [docs/rules.md](docs/rules.md) for the rules implemented so far.
+surfscan is a local, read-only CLI that checks a project for the ways AI coding agents widen its attack surface: what agents read (instruction files, MCP configs), what they install (dependencies), what they can reach (keys and secrets), and what they can run without asking (auto-approved commands).
+
+Every finding has a rule ID, severity, file and line, and a fix hint. It works on a developer machine, in a pre-commit hook and in CI.
+
+## Install
+
+Requires Node 20 or later. surfscan is not published to npm yet, so build it from source:
 
 ```
 npm install
 npm run build
-node dist/cli/bin.js rules .
+node dist/cli/bin.js scan .
 ```
+
+## Commands
+
+Each command takes an optional path, which defaults to `.`.
+
+| Command | What it does | Example |
+| --- | --- | --- |
+| `rules` | Checks agent instruction files for hidden or risky instructions | `surfscan rules .` |
+| `mcp` | Audits MCP server configs and tool descriptions | `surfscan mcp --tools tools.json` |
+| `deps` | Verifies dependencies against the npm registry | `surfscan deps --offline` |
+| `keys` | Finds keys and secrets an agent can reach | `surfscan keys .` |
+| `approvals` | Finds commands agents may run without asking | `surfscan approvals .` |
+| `scan` | Runs all five and merges the results | `surfscan scan . --fail-on medium` |
+
+Options for every command:
+
+- `--format text|json`: output format (default `text`)
+- `--fail-on high|medium|low|info`: exit 1 at or above this severity (default `high`)
+- `--config <file>`: config file (default `surfscan.json` in the scanned directory, if present)
+- `--no-color`: disable colored output
+
+Options for `deps` and `scan`:
+
+- `--offline`: do not contact the registry; run local checks only
+
+Options for `mcp`:
+
+- `--tools <file.json>`: check an exported tool list
+- `--connect`: launch each configured local server and list its tools
+- `--yes`: skip the `--connect` confirmation
+- `--update-lock`: write tool description hashes to `.surfscan/mcp.lock.json`; needs `--tools` or `--connect`
+
+### Checking MCP tool descriptions
+
+Tool descriptions are not in config files; they come from the running server. MCP-001 and MCP-002 therefore need a tool list, and `surfscan mcp` and `surfscan scan` skip them without one.
+
+A tool list can be a `tools/list` result (`{ "tools": [...] }`, optionally inside a JSON-RPC `result`), a bare array, or `{ "servers": { "<name>": { "tools": [...] } } }`.
+
+`--connect` runs third-party code on your machine. It shows what it will launch and asks first, refuses when nobody can answer unless you pass `--yes`, and never runs by default or under `scan`.
+
+## Rules
+
+Details, examples and detection choices for each rule are in [docs/rules.md](docs/rules.md).
+
+| ID | Severity | Finding |
+| --- | --- | --- |
+| RULES-001 | high | Invisible Unicode in instruction file |
+| RULES-002 | high | Hidden instructions in comments or markup |
+| RULES-003 | high | Download piped into a shell |
+| RULES-004 | high | Instruction to read or send credentials |
+| RULES-005 | high | Instruction to override earlier instructions or skip confirmation |
+| RULES-006 | medium | Long encoded block |
+| RULES-007 | medium | Instruction to install unpinned packages |
+| RULES-008 | medium | Instruction to fetch and follow an external URL |
+| MCP-001 | high | Injection-style text in tool description |
+| MCP-002 | high | Tool description changed since the saved lock |
+| MCP-003 | high | Server with filesystem access to the home directory or root |
+| MCP-004 | medium | Server launched from an unpinned remote package |
+| MCP-005 | medium | Server reached over plain http or an unknown host |
+| MCP-006 | info | No lock file yet |
+| DEPS-001 | high | Package does not exist on the registry |
+| DEPS-002 | high | Name very close to a popular package |
+| DEPS-003 | medium | Recent maintainer or owner change |
+| DEPS-004 | medium | Newly published package |
+| DEPS-005 | medium | Install scripts present |
+| DEPS-006 | low | Unpinned version |
+| DEPS-007 | low | Deprecated package |
+| KEYS-001 | high | Live or production key |
+| KEYS-002 | high | Env file with secrets not covered by .gitignore |
+| KEYS-003 | medium | Wildcard or admin scope in cloud policy |
+| APPR-001 | high | Bypass or auto-approve mode enabled |
+| APPR-002 | high | Allowlist includes destructive commands |
+| APPR-003 | high | Wildcard shell permission |
+| APPR-004 | medium | All project MCP servers or tools auto-approved |
+| APPR-005 | medium | File edits auto-approved |
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Nothing at or above `--fail-on` |
+| 1 | At least one finding at or above `--fail-on` |
+| 2 | Usage or runtime error |
+
+If the registry cannot be reached, `deps` prints a warning to stderr and reports only what it could check. The exit code does not change, so a clean result with that warning does not mean the dependencies were verified.
+
+## Config
+
+`surfscan.json`:
+
+```json
+{
+  "ignore": ["RULES-006"],
+  "ignorePaths": ["vendor/**"],
+  "deps": { "minAgeDays": 30 }
+}
+```
+
+- `ignore`: rule IDs to skip
+- `ignorePaths`: globs to exclude from scanning
+- `deps.minAgeDays`: DEPS-004 threshold in days (default 30)
+
+Unknown keys are rejected with an error.
+
+## What surfscan does not do
+
+- It does not check keys against providers. "Live" refers to a key's format.
+- It does not execute project or agent code. The one exception is `mcp --connect`, which is opt-in and asks first.
+- It does not fix anything. The only file it writes is the MCP lock file, and only with `--update-lock`.
+- It does not replace code review. Detection is static pattern matching, with the false positives and false negatives described in [docs/rules.md](docs/rules.md).
+
+Only `deps`, and `scan` because it runs `deps`, uses the network. They contact npm's registry and download count endpoints and send package names only.

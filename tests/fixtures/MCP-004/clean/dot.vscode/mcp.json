@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "npm": { "command": "npx", "args": ["-y", "@example/server@1.2.3"] },
+    "python": { "command": "uvx", "args": ["example-server==1.2.3"] },
+    "container": { "command": "docker", "args": ["run", "-i", "ghcr.io/example/server@sha256:abc"] },
+    "local": { "command": "node", "args": ["./server.js"] }
+  }
+}

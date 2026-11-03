@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "servers": {
+    "*": {
+      "search": "sha256:3b34ec5d65dd73d77fc29dfe84f7753a699ad420b27e1e4739c8f47db2047291"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "plain": { "url": "http://mcp.example.net/sse" },
+    "unknown": { "url": "https://mcp.example.net/sse" },
+    "bridge": { "command": "node", "args": ["bridge.js", "http://bridge.example.net/mcp"] }
+  }
+}

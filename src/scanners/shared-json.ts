@@ -1,4 +1,36 @@
-import { LineIndex } from '../core/text.js';
+import { LineIndex, stripBom } from '../core/text.js';
+
+/** Parse JSON that may contain comments and trailing commas, as VS Code's mcp.json may. */
+export function parseJsonc(raw: string): unknown {
+  const text = stripBom(raw);
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      out += ch;
+      if (ch === '\\') out += text[++i] ?? '';
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+      out += ch;
+    } else if (ch === '/' && text[i + 1] === '/') {
+      const end = text.indexOf('\n', i);
+      i = end === -1 ? text.length : end - 1;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else if (ch === '}' || ch === ']') {
+      let tail = out.length;
+      while (tail > 0 && /\s/.test(out[tail - 1]!)) tail--;
+      if (out[tail - 1] === ',') out = out.slice(0, tail - 1);
+      out += ch;
+    } else {
+      out += ch;
+    }
+  }
+  return JSON.parse(out);
+}
 
 /**
  * Best-effort line lookup for values in a JSON file, so findings can point at

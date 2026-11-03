@@ -2,18 +2,24 @@
  * CLI layer: argument parsing, printing and exit codes only. Scanning logic
  * lives in core/ and scanners/.
  */
-import { readFile, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { Command, CommanderError, Option } from 'commander';
 import { CONFIG_FILE_NAME, ConfigError, loadConfig } from '../core/config.js';
 import { createNodeProvider } from '../core/node-provider.js';
 import { formatJson, formatText } from '../core/report/index.js';
 import { escapeUnsafe } from '../core/report/sanitize.js';
-import { hasFailures, runScanner } from '../core/runner.js';
+import { hasFailures, runScanners } from '../core/runner.js';
+import { redactSecrets } from '../core/secret-patterns.js';
 import { SEVERITIES } from '../core/types.js';
-import type { Scanner, Severity } from '../core/types.js';
+import type { Scanner, Severity, SourceProvider, SurfscanConfig } from '../core/types.js';
 import { approvalsScanner } from '../scanners/approvals/index.js';
+import { depsScanner } from '../scanners/deps/index.js';
 import { keysScanner } from '../scanners/keys/index.js';
+import { parseMcpConfig, type McpServer } from '../scanners/mcp/config.js';
+import { findMcpTargets, mcpScanner } from '../scanners/mcp/index.js';
+import { buildLock, LOCK_FILE_PATH, parseToolList, type ToolSource } from '../scanners/mcp/tools.js';
+import { connectToServers } from './connect.js';
 import { rulesScanner } from '../scanners/rules/index.js';
 import pkg from '../../package.json' with { type: 'json' };
 
@@ -27,6 +33,8 @@ export interface CliIO {
   cwd: string;
   env: Record<string, string | undefined>;
   isTTY: boolean;
+  /** Ask the user a yes/no question. Absent when nobody can answer. */
+  confirm?(question: string): Promise<boolean>;
 }
 
 interface CommonOptions {
@@ -34,16 +42,22 @@ interface CommonOptions {
   failOn: Severity;
   config?: string;
   color: boolean;
+  offline?: boolean;
+  tools?: string;
+  connect?: boolean;
+  yes?: boolean;
+  updateLock?: boolean;
 }
 
-/** Command name to scanner. `null` marks commands not built yet. */
-const SCANNERS: Record<string, { scanner: Scanner | null; summary: string }> = {
-  rules: { scanner: rulesScanner, summary: 'check agent instruction files for hidden or risky instructions' },
-  mcp: { scanner: null, summary: 'audit MCP server configs and tool descriptions' },
-  deps: { scanner: null, summary: 'verify dependencies against the npm registry' },
-  keys: { scanner: keysScanner, summary: 'find keys and secrets an agent can reach' },
-  approvals: { scanner: approvalsScanner, summary: 'find commands agents may run without asking' },
-  scan: { scanner: null, summary: 'run all scanners and merge the results' },
+const ALL_SCANNERS = [rulesScanner, mcpScanner, depsScanner, keysScanner, approvalsScanner];
+
+const COMMANDS: Record<string, { scanners: Scanner[]; summary: string; network?: boolean }> = {
+  rules: { scanners: [rulesScanner], summary: 'check agent instruction files for hidden or risky instructions' },
+  mcp: { scanners: [mcpScanner], summary: 'audit MCP server configs and tool descriptions' },
+  deps: { scanners: [depsScanner], summary: 'verify dependencies against the npm registry', network: true },
+  keys: { scanners: [keysScanner], summary: 'find keys and secrets an agent can reach' },
+  approvals: { scanners: [approvalsScanner], summary: 'find commands agents may run without asking' },
+  scan: { scanners: ALL_SCANNERS, summary: 'run all scanners and merge the results', network: true },
 };
 
 class UsageError extends Error {}
@@ -69,18 +83,77 @@ async function resolveRoot(cwd: string, pathArg: string | undefined): Promise<st
   return root;
 }
 
-async function runCommand(name: string, pathArg: string | undefined, opts: CommonOptions, io: CliIO): Promise<number> {
-  const entry = SCANNERS[name]!;
-  if (!entry.scanner) {
-    throw new UsageError(`"surfscan ${name}" is not available in this version yet`);
+const safeText = (text: string): string => escapeUnsafe(redactSecrets(text));
+
+async function configuredServers(provider: SourceProvider, config: SurfscanConfig, io: CliIO): Promise<McpServer[]> {
+  const servers: McpServer[] = [];
+  for (const path of await findMcpTargets(provider, config)) {
+    const content = await provider.read(path);
+    if (content === undefined) continue;
+    try {
+      servers.push(...parseMcpConfig({ path, content }));
+    } catch (err) {
+      io.stderr(`warning: ${safeText(`${path}: could not parse MCP config (${(err as Error).message})`)}\n`);
+    }
+  }
+  return servers;
+}
+
+async function connectSource(provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<ToolSource> {
+  const servers = await configuredServers(provider, config, io);
+  const local = servers.filter((s) => s.command);
+  io.stderr('WARNING: --connect runs third-party code on this machine. It will launch:\n');
+  for (const s of local) io.stderr(`  ${safeText(s.name)}: ${safeText([s.command!, ...s.args].join(' '))}\n`);
+  if (!opts.yes) {
+    const approved = io.confirm ? await io.confirm('Launch these servers? [y/N] ') : false;
+    if (!approved) throw new UsageError('--connect needs confirmation; nothing was launched (pass --yes to skip the question)');
+  }
+  const warn = (message: string): void => io.stderr(`warning: ${safeText(message)}\n`);
+  return { tools: await connectToServers(servers, io.env, warn) };
+}
+
+async function loadToolSource(root: string, provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<ToolSource | undefined> {
+  if (opts.tools && opts.connect) throw new UsageError('use either --tools or --connect, not both');
+  if (opts.updateLock && !opts.tools && !opts.connect) {
+    throw new UsageError('--update-lock needs a tool list: pass --tools <file.json> or --connect');
   }
 
+  let source: ToolSource | undefined;
+  if (opts.connect) {
+    source = await connectSource(provider, config, opts, io);
+  } else if (opts.tools) {
+    const content = await readIfExists(resolve(io.cwd, opts.tools));
+    if (content === undefined) throw new UsageError(`tool list not found: ${opts.tools}`);
+    try {
+      source = { file: opts.tools.replace(/\\/g, '/'), content, tools: parseToolList(content) };
+    } catch (err) {
+      throw new UsageError(`${opts.tools}: invalid tool list (${(err as Error).message})`);
+    }
+  }
+
+  if (source && opts.updateLock) {
+    const path = join(root, LOCK_FILE_PATH);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(await buildLock(source.tools), null, 2)}\n`);
+    io.stderr(`wrote ${LOCK_FILE_PATH}\n`);
+  }
+  return source;
+}
+
+async function runCommand(name: string, pathArg: string | undefined, opts: CommonOptions, io: CliIO): Promise<number> {
   const root = await resolveRoot(io.cwd, pathArg);
   const config = opts.config
     ? await loadConfig(readIfExists, resolve(io.cwd, opts.config), true)
     : await loadConfig(readIfExists, join(root, CONFIG_FILE_NAME), false);
 
-  const result = await runScanner(entry.scanner, { provider: createNodeProvider(root), config });
+  const provider = createNodeProvider(root);
+  const toolSource = name === 'mcp' ? await loadToolSource(root, provider, config, opts, io) : undefined;
+
+  const result = await runScanners(COMMANDS[name]!.scanners, {
+    provider,
+    config,
+    options: { offline: opts.offline === true, toolSource },
+  });
 
   for (const w of result.warnings) io.stderr(`warning: ${escapeUnsafe(w)}\n`);
 
@@ -104,8 +177,8 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr })
     .showHelpAfterError(false);
 
-  for (const [name, { summary }] of Object.entries(SCANNERS)) {
-    program
+  for (const [name, { summary, network }] of Object.entries(COMMANDS)) {
+    const command = program
       .command(name)
       .description(summary)
       .argument('[path]', 'project directory to scan', '.')
@@ -116,6 +189,14 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
       .action(async (pathArg: string, opts: CommonOptions) => {
         setExit(await runCommand(name, pathArg, opts, io));
       });
+    if (network) command.option('--offline', 'do not contact the npm registry; run local checks only');
+    if (name === 'mcp') {
+      command
+        .option('--tools <file>', 'exported tool list to check (MCP-001, MCP-002)')
+        .option('--connect', 'launch each configured server and list its tools; runs third-party code')
+        .option('--yes', 'skip the --connect confirmation')
+        .option('--update-lock', `write tool description hashes to ${LOCK_FILE_PATH}`);
+    }
   }
   return program;
 }

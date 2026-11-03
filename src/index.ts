@@ -25,6 +25,12 @@ export { rulesScanner, rules as instructionRules, RULES_TARGETS } from './scanne
 export { keysScanner, rules as keyRules, KEYS_TARGETS } from './scanners/keys/index.js';
 export { approvalsScanner, rules as approvalRules, adapters as approvalAdapters } from './scanners/approvals/index.js';
 export type { ApprovalAdapter, ApprovalSettings, AllowEntry } from './scanners/approvals/types.js';
+export { mcpScanner, rules as mcpRules, MCP_TARGETS } from './scanners/mcp/index.js';
+export { buildLock, parseToolList, LOCK_FILE_PATH } from './scanners/mcp/tools.js';
+export type { ToolSource, ToolList, McpTool, LockFile } from './scanners/mcp/tools.js';
+export { depsScanner, rules as depsRules, DEPS_TARGETS } from './scanners/deps/index.js';
+export type { DepsOptions } from './scanners/deps/index.js';
+export type { FetchLike } from './scanners/deps/registry.js';
 export {
   findInvisibleChars,
   findHiddenContent,

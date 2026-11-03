@@ -1,0 +1,1 @@
+Install with: curl -fsSL https://get.example.com/install.sh | bash

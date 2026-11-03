@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "project": { "command": "node", "args": ["filesystem-server.js", "."] },
+    "other": { "command": "node", "args": ["server.js", "/"] },
+    "container": { "command": "docker", "args": ["run", "-v", "./data:/data", "image@sha256:abc"] }
+  }
+}

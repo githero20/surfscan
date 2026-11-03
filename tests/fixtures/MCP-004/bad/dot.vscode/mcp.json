@@ -1,0 +1,8 @@
+{
+  // VS Code allows comments and trailing commas here.
+  "servers": {
+    "npm": { "command": "npx", "args": ["-y", "@example/server"] },
+    "python": { "command": "uvx", "args": ["example-server"] },
+    "container": { "command": "docker", "args": ["run", "-i", "--rm", "ghcr.io/example/server"] },
+  },
+}

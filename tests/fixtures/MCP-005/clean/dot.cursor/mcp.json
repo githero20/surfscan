@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "known": { "url": "https://mcp.github.com/mcp" },
+    "local": { "url": "http://localhost:3000/mcp" }
+  }
+}

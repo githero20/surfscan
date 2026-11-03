@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "root": {
+      "command": "node", "args": ["filesystem-server.js", "/"]
+    },
+    "home": {
+      "command": "node", "args": ["filesystem-server.js", "~"]
+    },
+    "keys": {
+      "command": "node", "args": ["filesystem-server.js", "~/.ssh"]
+    },
+    "container": {
+      "command": "docker", "args": ["run", "-v", "/var/run/docker.sock:/var/run/docker.sock", "image@sha256:abc"]
+    }
+  }
+}
