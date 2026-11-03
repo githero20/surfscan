@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "billing": {
+      "command": "node",
+      "args": ["server.js"],
+      "env": {
+        "PROD_API_KEY": "a9f3k2l1m0n8b7v6"
+      }
+    }
+  }
+}

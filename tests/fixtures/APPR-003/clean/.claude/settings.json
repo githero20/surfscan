@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(ls *)",
+      "WebFetch(domain:docs.example.com)",
+      "*"
+    ],
+    "deny": ["Bash"]
+  }
+}

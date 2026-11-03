@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run test *)",
+      "Bash(git status)",
+      "Bash(git log *)",
+      "Bash(git commit *)",
+      "Bash(rm dist/bundle.js)",
+      "Bash(aws s3 ls *)",
+      "Read(./src/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)"
+    ]
+  }
+}

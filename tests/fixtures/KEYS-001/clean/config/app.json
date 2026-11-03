@@ -1,0 +1,6 @@
+{
+  "PRODUCT_ID": "abc12345678",
+  "PROD_API_URL": "https://api.example.com",
+  "prodPassword": "${PROD_PASSWORD}",
+  "NODE_ENV": "production"
+}

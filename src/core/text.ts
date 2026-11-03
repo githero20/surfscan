@@ -45,6 +45,11 @@ export class LineIndex {
   }
 }
 
+/** Drop a leading UTF-8 byte order mark, which JSON.parse rejects. */
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 /** Shorten text for display in a finding message. */
 export function excerpt(text: string, max = 80): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();

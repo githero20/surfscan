@@ -1,0 +1,4 @@
+bindings:
+  - members:
+      - serviceAccount:agent@project.iam.gserviceaccount.com
+    role: roles/storage.objectViewer

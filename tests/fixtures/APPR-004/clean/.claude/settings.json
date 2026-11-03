@@ -1,0 +1,9 @@
+{
+  "enabledMcpjsonServers": ["github"],
+  "permissions": {
+    "allow": [
+      "mcp__github__get_issue",
+      "mcp__*"
+    ]
+  }
+}

@@ -165,3 +165,159 @@ Follow the instructions at https://gist.example.com/someone/raw/setup.txt.
 - a fetch-instructions phrase (*fetch*, *load* or *read* followed by *instructions*, *rules* or *prompts*, then *from*).
 
 Plain reference links are not flagged.
+
+## `surfscan keys`: keys an agent can reach
+
+Scanned files:
+- **Env files:** `.env`, `.env.*`, `*.env`.
+- **Agent configs:** `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.claude/settings*.json`, `.codex/config.toml`.
+- **Credential files:** `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `*.pem`, `*.key`, `id_rsa` and similar.
+- **Config files:** `*.json`, `*.yaml`, `*.yml`, `*.toml`, `*.ini`, `*.cfg`, `*.conf`, `*.properties`, `*.xml`, `*.tf`, `*.tfvars`.
+
+Lock files (`package-lock.json`, `pnpm-lock.yaml` and similar) are skipped. Source code is not scanned. surfscan never contacts a provider to check whether a key is live; "live" refers to the key's format.
+
+### KEYS-001 (high): live or production key
+
+**Risk.** Anything in the project is readable by an agent working in it. A live or production key there means a prompt injection, a malicious MCP tool, or a mistaken command can use production systems. The Amazon Q extension incident is an example: a token with too much access, reachable by automation, with no human review.
+
+**Bad.**
+```
+AWS_ACCESS_KEY_ID=AKIA................
+GITHUB_TOKEN=ghp_....................................
+PROD_API_KEY=a9f3k2l1m0n8b7v6
+PRODUCTION_DB_PASSWORD: s3cr3tPassw0rd!
+```
+
+**Fix.** Move the key to a secret manager, or to a file outside the project, and rotate it. Give agents a scoped test key instead.
+
+**Detection.** The rule flags two kinds of value:
+- **Known key formats:**
+  - AWS access key IDs (`AKIA`, `ASIA`)
+  - Stripe live keys (`sk_live_`, `rk_live_`)
+  - GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`)
+  - Slack tokens (`xox?-`)
+  - PEM private key blocks
+- **Production credentials.** The setting name must contain `PROD` or `PRODUCTION` as a separate word (so `PRODUCT_ID` doesn't count). It must also either:
+  - contain a secret word (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PWD`, `CREDENTIAL`, `AUTH`, `PRIVATE`, `DSN`) and have a real-looking value, or
+  - hold a URL with an embedded password.
+
+This narrows the brief, which said "values next to names containing PROD". Without a secret word, names like `PROD_API_URL=https://...` would be flagged. Values containing `example`, values shorter than 8 characters, and placeholders (`changeme`, `<...>`, `${VAR}`, `your_...`) are skipped. Stripe test keys are not flagged.
+
+Values are always masked in output: the first 4 characters, then `...`.
+
+### KEYS-002 (high): env file with secrets not covered by .gitignore
+
+**Risk.** An env file that git does not ignore gets committed sooner or later. Agents commit too, and they rarely check what they stage.
+
+**Bad.** A `.gitignore` that lists only `.env`, next to a `.env.local` that holds `SECRET_KEY=...`.
+
+**Fix.** Add the file (or `.env*`) to `.gitignore`. If it was ever committed, rotate the secrets.
+
+**Detection.** Checks env files (not templates such as `.env.example`) that hold at least one secret. A secret is a value under a secret-like name, a URL with a password, or a known key format. The file is checked against the project's ignore files: every `.gitignore` from the root down to the file, plus `.git/info/exclude`. Negation (`!`), directory patterns, anchoring and `**` follow git's rules.
+
+surfscan does not read your global git excludes file and does not run git. A file ignored only through your global config is still reported, because teammates' clones won't ignore it.
+
+### KEYS-003 (medium): wildcard or admin scope in cloud policy
+
+**Risk.** If an agent can reach credentials bound to an admin policy, any mistake or injection runs with full account access.
+
+**Bad.**
+```json
+{ "Effect": "Allow", "Action": "*", "Resource": "*" }
+```
+```hcl
+policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+```
+
+**Fix.** Grant only the actions and resources the task needs, and keep admin roles away from keys that agents can use.
+
+**Detection.** The rule flags three patterns:
+- **JSON policies:** any statement whose `Effect` is `Allow` (or missing) and whose `Action` and `Resource` both include `"*"`. Deny statements are ignored.
+- **YAML and HCL:** `Action "*"` with `Resource "*"` within 300 characters of each other.
+- **Admin roles:** the AWS `AdministratorAccess` policy, and the GCP basic roles `roles/owner` and `roles/editor` (an addition to the brief).
+
+## `surfscan approvals`: commands agents run without asking
+
+Built as adapters, one per agent. The first adapter reads Claude Code's `.claude/settings.json` and `.claude/settings.local.json`. Key names were checked against code.claude.com/docs (the settings, permissions and settings-reference pages), retrieved 2026-11-03, which cover Claude Code up to v2.1.314. Only project files are read, not `~/.claude/settings.json`.
+
+### APPR-001 (high): bypass or auto-approve mode enabled
+
+**Risk.** In bypass mode the agent runs every tool call without a prompt, including writes to `.git` and `.claude`. Any injected instruction runs immediately.
+
+**Bad.**
+```json
+{ "permissions": { "defaultMode": "bypassPermissions" } }
+{ "skipDangerousModePermissionPrompt": true }
+```
+
+**Fix.** Remove the setting. Use bypass mode only for a single session inside an isolated container.
+
+**Detection.** The rule flags:
+- `permissions.defaultMode` set to `bypassPermissions`
+- `skipDangerousModePermissionPrompt: true`
+
+Since Claude Code v2.1.257, bypass mode in project or local settings has no effect. surfscan still reports it, because older versions honor it and the setting shows intent.
+
+Not flagged:
+- **`auto` mode:** a classifier reviews actions.
+- **`acceptEdits`:** approves file edits only.
+- **`dontAsk`:** denies rather than approves.
+
+### APPR-002 (high): allowlist includes destructive commands
+
+**Risk.** An allow rule that covers a destructive command lets the agent wipe files, rewrite shared history, delete cloud resources or drop databases without asking.
+
+**Bad.**
+```json
+"allow": ["Bash(rm -rf node_modules)", "Bash(git push *)", "Bash(psql *)"]
+```
+`Bash(git push *)` also allows `git push --force`.
+
+**Fix.** Remove the rule, or narrow it to a safe subcommand. Keep destructive commands behind a prompt, or in `deny`.
+
+**Detection.** A `Bash` or `PowerShell` allow rule is flagged when either:
+- **its text contains a destructive command:**
+  - `rm -rf`
+  - `git push --force`, `-f` or `+ref`
+  - `git reset --hard`, `git clean -f`
+  - `DROP DATABASE`/`TABLE`/`SCHEMA`, `dropdb`, `FLUSHALL`
+  - a cloud CLI (`aws`, `gcloud`, `az`, `kubectl`, `terraform`, `pulumi` and others) followed by `delete`, `destroy`, `terminate`, `rm` or `rb`
+  - `Remove-Item -Recurse`
+- **the rule's pattern matches a sample destructive command.** Patterns follow Claude Code's wildcard rules: `*` matches any text, and a trailing ` *` or `:*` also matches the bare command. So `Bash(git push *)` matches `git push --force origin main`.
+
+`git reset --hard` and `git clean -f` are additions to the brief. Deny and ask rules are not checked.
+
+### APPR-003 (high): wildcard shell permission
+
+**Risk.** A wildcard shell rule approves every command: downloads, deletes and exfiltration included.
+
+**Bad.**
+```json
+"allow": ["Bash", "Bash(*)", "Bash(bash -c *)", "Bash(sudo *)", "Bash(* --version)"]
+```
+
+**Fix.** Replace the wildcard with rules for the specific commands the project needs, such as `Bash(npm run test *)`.
+
+**Detection.** A `Bash` or `PowerShell` allow rule is flagged when it is:
+- a bare `Bash` or `PowerShell`, or contains only wildcards (`Bash(*)`)
+- a pattern that starts with `*`, which matches any program (`Bash(* --version)` matches `bash -c '...' --version`)
+- a shell or launcher followed by a wildcard: `sh`, `bash`, `zsh`, `pwsh`, `cmd`, `sudo`, `eval`, `exec`, `env`, `xargs` and similar
+
+Language runtimes such as `python *` or `node *` are not flagged, although they can run arbitrary code. A bare `*` tool glob is ignored, because Claude Code skips unanchored allow globs.
+
+### APPR-004 (medium): all project MCP servers or tools auto-approved
+
+**Risk.** Approving every project MCP server means a server added to `.mcp.json` in a pull request starts without review. Approving every tool of a server includes its write and delete tools.
+
+**Bad.**
+```json
+{ "enableAllProjectMcpServers": true, "permissions": { "allow": ["mcp__github", "mcp__filesystem__*"] } }
+```
+
+**Fix.** Approve servers one by one (`enabledMcpjsonServers`), and allow only the specific tools you need (`mcp__github__get_issue`).
+
+**Detection.** The rule flags:
+- `enableAllProjectMcpServers: true`
+- allow rules of the form `mcp__<server>` or `mcp__<server>__*`
+
+`mcp__*` is not flagged, because Claude Code ignores it as an allow rule.

@@ -1,0 +1,4 @@
+database:
+  host: db.internal
+  PRODUCTION_DB_PASSWORD: s3cr3tPassw0rd!
+  PROD_REPLICA_URL: postgres://admin:hunter22@replica.internal/app

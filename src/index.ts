@@ -22,6 +22,9 @@ export { createNodeProvider } from './core/node-provider.js';
 export { maskSecret, redactSecrets, SECRET_PATTERNS } from './core/secret-patterns.js';
 export * from './core/report/index.js';
 export { rulesScanner, rules as instructionRules, RULES_TARGETS } from './scanners/rules/index.js';
+export { keysScanner, rules as keyRules, KEYS_TARGETS } from './scanners/keys/index.js';
+export { approvalsScanner, rules as approvalRules, adapters as approvalAdapters } from './scanners/approvals/index.js';
+export type { ApprovalAdapter, ApprovalSettings, AllowEntry } from './scanners/approvals/types.js';
 export {
   findInvisibleChars,
   findHiddenContent,

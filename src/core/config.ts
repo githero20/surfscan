@@ -1,3 +1,4 @@
+import { stripBom } from './text.js';
 import type { SurfscanConfig } from './types.js';
 
 export const CONFIG_FILE_NAME = 'surfscan.json';
@@ -87,7 +88,7 @@ export function validateConfig(raw: unknown, source = CONFIG_FILE_NAME): Surfsca
 export function parseConfig(text: string, source = CONFIG_FILE_NAME): SurfscanConfig {
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = JSON.parse(stripBom(text));
   } catch (err) {
     throw new ConfigError(`${source}: invalid JSON (${(err as Error).message})`);
   }

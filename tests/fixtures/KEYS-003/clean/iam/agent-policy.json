@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": ["arn:aws:s3:::project-artifacts", "arn:aws:s3:::project-artifacts/*"]
+    },
+    {
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": { "Bool": { "aws:MultiFactorAuthPresent": "false" } }
+    }
+  ]
+}

@@ -111,7 +111,7 @@ describe('cli', () => {
     });
 
     it('exits 2 for commands not built yet', async () => {
-      const r = await runCli(['keys']);
+      const r = await runCli(['deps']);
       expect(r.code).toBe(2);
       expect(r.stderr).toContain('not available');
     });

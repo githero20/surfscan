@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(*)",
+      "Bash(bash -c *)",
+      "PowerShell(*)",
+      "Bash(* --version)",
+      "Bash(sudo *)"
+    ]
+  }
+}

@@ -28,6 +28,10 @@ describe('config', () => {
     expect(c).toEqual({ ignore: ['RULES-006'], ignorePaths: ['docs/**'], deps: { minAgeDays: 7 } });
   });
 
+  it('accepts a file saved with a UTF-8 byte order mark', () => {
+    expect(parseConfig('﻿{"ignore":["RULES-001"]}').ignore).toEqual(['RULES-001']);
+  });
+
   it.each([
     ['{"extra":1}', 'unknown key "extra"'],
     ['{"deps":{"maxAge":1}}', 'unknown key "deps.maxAge"'],

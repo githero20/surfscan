@@ -1,0 +1,6 @@
+{
+  "stripe": {
+    "secretKey": "__FAKE_STRIPE_LIVE__"
+  },
+  "slackToken": "__FAKE_SLACK__"
+}

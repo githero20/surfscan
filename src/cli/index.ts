@@ -12,6 +12,8 @@ import { escapeUnsafe } from '../core/report/sanitize.js';
 import { hasFailures, runScanner } from '../core/runner.js';
 import { SEVERITIES } from '../core/types.js';
 import type { Scanner, Severity } from '../core/types.js';
+import { approvalsScanner } from '../scanners/approvals/index.js';
+import { keysScanner } from '../scanners/keys/index.js';
 import { rulesScanner } from '../scanners/rules/index.js';
 import pkg from '../../package.json' with { type: 'json' };
 
@@ -39,8 +41,8 @@ const SCANNERS: Record<string, { scanner: Scanner | null; summary: string }> = {
   rules: { scanner: rulesScanner, summary: 'check agent instruction files for hidden or risky instructions' },
   mcp: { scanner: null, summary: 'audit MCP server configs and tool descriptions' },
   deps: { scanner: null, summary: 'verify dependencies against the npm registry' },
-  keys: { scanner: null, summary: 'find keys and secrets an agent can reach' },
-  approvals: { scanner: null, summary: 'find commands agents may run without asking' },
+  keys: { scanner: keysScanner, summary: 'find keys and secrets an agent can reach' },
+  approvals: { scanner: approvalsScanner, summary: 'find commands agents may run without asking' },
   scan: { scanner: null, summary: 'run all scanners and merge the results' },
 };
 

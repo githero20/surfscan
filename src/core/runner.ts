@@ -35,8 +35,13 @@ export function sortFindings(findings: Finding[]): Finding[] {
 }
 
 /** Discover target files for a scanner, honouring default and configured ignores. */
-export function listTargets(provider: SourceProvider, config: SurfscanConfig, patterns: string[]): Promise<string[]> {
-  return provider.list(patterns, [...DEFAULT_IGNORE_PATHS, ...config.ignorePaths]);
+export function listTargets(
+  provider: SourceProvider,
+  config: SurfscanConfig,
+  patterns: string[],
+  extraIgnore: string[] = [],
+): Promise<string[]> {
+  return provider.list(patterns, [...DEFAULT_IGNORE_PATHS, ...extraIgnore, ...config.ignorePaths]);
 }
 
 export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<ScanResult> {
