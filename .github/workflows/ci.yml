@@ -29,8 +29,7 @@ jobs:
       - run: npm run build
       # The tests run against src/, so run the built CLI once as well.
       - name: Smoke test the built CLI
-        run: node dist/cli/bin.js scan . --offline --fail-on high --format json
-        working-directory: tests/fixtures/RULES-001/clean
+        run: node dist/cli/bin.js scan tests/fixtures/RULES-001/clean --offline --fail-on high --format json
         shell: bash
       - name: Check the package contents
         run: npm pack --dry-run
