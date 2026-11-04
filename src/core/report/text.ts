@@ -5,6 +5,8 @@ import { escapeUnsafe, redactFinding } from './sanitize.js';
 
 export interface TextOptions {
   color: boolean;
+  /** A check could not run; say so under the summary. */
+  incomplete?: boolean;
 }
 
 const COLORS: Record<Severity, string> = {
@@ -47,5 +49,6 @@ export function formatText(findings: Finding[], opts: TextOptions): string {
     lines.push(opts.color ? `  ${DIM}Fix: ${f.fix}${RESET}` : `  Fix: ${f.fix}`);
   }
   lines.push(summaryLine(findings));
+  if (opts.incomplete) lines.push('Incomplete: some checks could not run, so this result is not a clean bill of health (see the warnings)');
   return `${lines.join('\n')}\n`;
 }

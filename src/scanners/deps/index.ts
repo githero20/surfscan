@@ -195,6 +195,7 @@ function dataFor(context: ScanContext): Promise<DepsData> {
       const first = lookups.get(failed[0]!) as Extract<Lookup, { status: 'error' }>;
       context.warn(
         `deps: results are incomplete, could not check ${failed.length} of ${names.length} package(s) on the registry (${failed[0]}: ${first.message})`,
+        { incomplete: true },
       );
     }
     return { refs, lookups, options };

@@ -35,6 +35,7 @@ Options for every command:
 - `--fail-on high|medium|low|info`: exit 1 at or above this severity (default `high`)
 - `--config <file>`: config file (default `surfscan.json` in the scanned directory, if present)
 - `--no-color`: disable colored output
+- `--strict`: exit 2 if any check could not run (see Exit codes)
 
 Options for `deps` and `scan`:
 
@@ -44,7 +45,8 @@ Options for `mcp`:
 
 - `--tools <file.json>`: check an exported tool list
 - `--connect`: launch each configured local server and list its tools
-- `--yes`: skip the `--connect` confirmation
+- `--yes`: skip the `--connect` questions; servers that are not pinned to a version are still skipped
+- `--allow-unpinned`: with `--connect --yes`, launch unpinned servers too
 - `--update-lock`: write tool description hashes to `.surfscan/mcp.lock.json`; needs `--tools` or `--connect`
 
 ### Checking MCP tool descriptions
@@ -53,7 +55,14 @@ Tool descriptions are not in config files; they come from the running server. MC
 
 A tool list can be a `tools/list` result (`{ "tools": [...] }`, optionally inside a JSON-RPC `result`), a bare array, or `{ "servers": { "<name>": { "tools": [...] } } }`.
 
-`--connect` runs third-party code on your machine. It shows what it will launch and asks first, refuses when nobody can answer unless you pass `--yes`, and never runs by default or under `scan`.
+`--connect` runs third-party code on your machine with your permissions. It never runs by default or under `scan`. What it does to limit the risk:
+
+- It shows each server's command and the names of its `env` variables, then asks about that server alone. You can approve some and skip others. It refuses when nobody can answer, unless you pass `--yes`.
+- A server that is not pinned to a version (for example `npx some-server`) runs whatever is newest, so it needs you to type the full word `yes`. With `--yes`, unpinned servers are skipped unless you also pass `--allow-unpinned`.
+- Servers start with a minimal environment: `PATH`, home and temp folders, and proxy and certificate settings. Your other shell variables, such as tokens, are not passed on. The only way to give a server one is a `${VAR}` reference in its `env` block, and the prompt shows those names.
+- With `--update-lock`, servers that were skipped or failed to start keep their saved hashes.
+
+This reduces what a server can reach; it is not a sandbox. A launched server can still read your files and use your network. To check servers you do not trust, run `--connect` in a container or throwaway machine, save the lock, and use `--tools` elsewhere.
 
 ## Rules
 
@@ -99,7 +108,9 @@ Details, examples and detection choices for each rule are in [docs/rules.md](doc
 | 1 | At least one finding at or above `--fail-on` |
 | 2 | Usage or runtime error |
 
-If the registry cannot be reached, `deps` prints a warning to stderr and reports only what it could check. The exit code does not change, so a clean result with that warning does not mean the dependencies were verified.
+If the registry cannot be reached, `deps` prints a warning to stderr and reports only what it could check. By default the exit code does not change, so exit 0 means "nothing found among the checks that ran", not "verified". The text report ends with an `Incomplete:` line, and the JSON report has `"complete": false` and a `warnings` array.
+
+In CI, pass `--strict`. If any check could not run (registry unreachable, a file too large to read, a rule that failed), surfscan exits 2 instead of 0. Findings still take priority: exit 1 wins over exit 2. `--offline` is a choice, so it does not count as incomplete.
 
 ## Config
 

@@ -70,7 +70,7 @@ export interface CliRun {
   stderr: string;
 }
 
-export async function runCli(args: string[], cwd = FIXTURES): Promise<CliRun> {
+export async function runCli(args: string[], cwd = FIXTURES, extra: Partial<CliIO> = {}): Promise<CliRun> {
   let stdout = '';
   let stderr = '';
   const io: CliIO = {
@@ -83,6 +83,7 @@ export async function runCli(args: string[], cwd = FIXTURES): Promise<CliRun> {
     cwd,
     env: {},
     isTTY: false,
+    ...extra,
   };
   const code = await main(args, io);
   return { code, stdout, stderr };

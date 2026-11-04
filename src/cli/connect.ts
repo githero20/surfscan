@@ -19,11 +19,37 @@ function winQuote(arg: string): string {
   return /[\s"&|<>^]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
 }
 
+/**
+ * Variables a server needs just to start (find node, npx, uvx, docker; reach
+ * the network through a proxy). Compared case-insensitively, since Windows
+ * variable names are. Everything else in the shell, such as GITHUB_TOKEN or
+ * AWS_SECRET_ACCESS_KEY, stays out unless the server's own config asks for it.
+ */
+const BASE_ENV_ALLOWLIST = new Set(
+  [
+    'PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+    'TEMP', 'TMP', 'TMPDIR', 'SystemRoot', 'SystemDrive', 'WINDIR', 'ComSpec', 'ProgramFiles',
+    'ProgramFiles(x86)', 'ProgramData', 'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'TERM', 'LANG',
+    'LC_ALL', 'LC_CTYPE', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'HTTP_PROXY',
+    'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+  ].map((name) => name.toLowerCase()),
+);
+
+/** The environment a launched server gets: the allowlist, plus the `env` block from its config. */
+export function buildChildEnv(server: McpServer, shellEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(shellEnv)) {
+    if (value !== undefined && BASE_ENV_ALLOWLIST.has(key.toLowerCase())) env[key] = value;
+  }
+  // ${VAR} in the config is the one explicit way for a shell variable to reach a server.
+  for (const [key, value] of Object.entries(server.env)) env[key] = expand(value, shellEnv);
+  return env;
+}
+
 /** Launch one server over stdio, list its tools, then stop it. */
 export function listServerTools(server: McpServer, baseEnv: NodeJS.ProcessEnv): Promise<McpTool[]> {
   return new Promise((resolve, reject) => {
-    const env = { ...baseEnv };
-    for (const [key, value] of Object.entries(server.env)) env[key] = expand(value, baseEnv);
+    const env = buildChildEnv(server, baseEnv);
     const command = expand(server.command!, baseEnv);
     const args = server.args.map((a) => expand(a, baseEnv));
 

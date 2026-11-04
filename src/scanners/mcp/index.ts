@@ -147,7 +147,8 @@ function imagePinned(image: string): boolean {
   return tag !== undefined && /^v?\d+\.\d+/.test(tag);
 }
 
-function unpinnedTarget(server: McpServer): string | undefined {
+/** What makes a server's launch command unpinned, or undefined if it is pinned. */
+export function unpinnedTarget(server: McpServer): string | undefined {
   if (isDocker(server)) {
     const image = dockerImage(server.args);
     return image && !imagePinned(image) ? `container image ${image}` : undefined;

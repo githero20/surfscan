@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fixture, materialize, runCli } from './helpers.js';
+import { FIXTURES, fixture, materialize, runCli } from './helpers.js';
 
 describe('cli', () => {
   it('exits 0 when there are no findings', async () => {
@@ -61,7 +61,56 @@ describe('cli', () => {
 
     it('prints an empty report when clean', async () => {
       const r = await runCli(['rules', fixture('RULES-008', 'clean'), '--format', 'json']);
-      expect(JSON.parse(r.stdout)).toEqual({ version: 1, summary: { high: 0, medium: 0, low: 0, info: 0 }, findings: [] });
+      expect(JSON.parse(r.stdout)).toEqual({
+        version: 1,
+        summary: { high: 0, medium: 0, low: 0, info: 0 },
+        complete: true,
+        warnings: [],
+        findings: [],
+      });
+    });
+  });
+
+  describe('incomplete results', () => {
+    const down = async (): Promise<never> => {
+      throw new Error('ENOTFOUND registry.test');
+    };
+    const run = (...flags: string[]) => runCli(['deps', fixture('cli', 'scan-all'), ...flags], FIXTURES, { fetch: down });
+
+    it('DEPS-001 exits 0 by default when the registry is unreachable, and says the result is incomplete', async () => {
+      const r = await run();
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain('could not check');
+      expect(r.stdout).toContain('Incomplete:');
+    });
+
+    it('DEPS-001 --strict exits 2 when the registry is unreachable', async () => {
+      const r = await run('--strict');
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('--strict');
+    });
+
+    it('DEPS-001 --format json reports complete: false and the warnings', async () => {
+      const report = JSON.parse((await run('--format', 'json')).stdout);
+      expect(report.complete).toBe(false);
+      expect(report.warnings).toEqual([expect.stringContaining('could not check')]);
+    });
+
+    it('--strict still exits 1 when there are findings at or above --fail-on', async () => {
+      const r = await run('--strict', '--fail-on', 'low');
+      expect(r.code).toBe(1);
+    });
+
+    it('DEPS-006 --offline is a choice, not an incomplete result', async () => {
+      const r = await runCli(['deps', fixture('cli', 'scan-all'), '--offline', '--strict', '--format', 'json']);
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout).complete).toBe(true);
+    });
+
+    it('--strict exits 0 when every check ran', async () => {
+      const r = await runCli(['rules', fixture('RULES-001', 'clean'), '--strict']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain('Incomplete');
     });
   });
 
@@ -215,6 +264,89 @@ describe('cli', () => {
       await writeFile(join(root, '.mcp.json'), JSON.stringify(config));
       const r = await runCli(['mcp', root, '--connect', '--yes']);
       expect(r.stderr).toContain('broken: could not list tools');
+    }, 30_000);
+
+    async function twoServers(): Promise<{ root: string; markers: [string, string] }> {
+      const root = await mkdtemp(join(tmpdir(), 'surfscan-connect-'));
+      const script = join(root, 'server.cjs');
+      const markers: [string, string] = [join(root, 'launched-a'), join(root, 'launched-b')];
+      await writeFile(script, `require('fs').writeFileSync(process.argv[2], '');\n${server}`);
+      const config = {
+        mcpServers: {
+          a: { command: process.execPath, args: [script, markers[0]] },
+          b: { command: process.execPath, args: [script, markers[1]] },
+        },
+      };
+      await writeFile(join(root, '.mcp.json'), JSON.stringify(config));
+      return { root, markers };
+    }
+
+    it('--connect asks about each server and launches only the approved ones', async () => {
+      const { root, markers } = await twoServers();
+      const answers = [false, true];
+      const r = await runCli(['mcp', root, '--connect'], FIXTURES, { confirm: async () => answers.shift()! });
+      expect(r.stderr).toContain('skipped');
+      await expect(stat(markers[0])).rejects.toThrow();
+      await expect(stat(markers[1])).resolves.toBeDefined();
+    }, 30_000);
+
+    it('--connect exits 2 when every server is declined', async () => {
+      const { root, markers } = await twoServers();
+      const r = await runCli(['mcp', root, '--connect'], FIXTURES, { confirm: async () => false });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('no servers were launched');
+      await expect(stat(markers[0])).rejects.toThrow();
+    });
+
+    it('--connect lists env variable names, never their values', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'surfscan-connect-'));
+      const config = { mcpServers: { s: { command: process.execPath, args: ['-e', ''], env: { TOKEN: '${MY_SECRET}', MODE: 'dev' } } } };
+      await writeFile(join(root, '.mcp.json'), JSON.stringify(config));
+      const r = await runCli(['mcp', root, '--connect'], FIXTURES, { env: { MY_SECRET: 'hunter2-value' }, confirm: async () => false });
+      expect(r.stderr).toContain('TOKEN (from your shell: $MY_SECRET)');
+      expect(r.stderr).toContain('MODE');
+      expect(r.stderr).not.toContain('hunter2-value');
+      expect(r.stderr).not.toContain('dev\n');
+    });
+
+    describe('unpinned servers', () => {
+      async function unpinnedProject(): Promise<string> {
+        const root = await mkdtemp(join(tmpdir(), 'surfscan-connect-'));
+        await writeFile(join(root, '.mcp.json'), JSON.stringify({ mcpServers: { latest: { command: 'npx', args: ['some-mcp-server'] } } }));
+        return root;
+      }
+
+      it('MCP-004 --connect --yes skips an unpinned server', async () => {
+        const r = await runCli(['mcp', await unpinnedProject(), '--connect', '--yes']);
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain('NOT PINNED');
+        expect(r.stderr).toContain('latest: skipped because it is not pinned');
+      });
+
+      it('MCP-004 --connect needs the full word "yes" for an unpinned server', async () => {
+        const asked: Array<{ question: string; exact?: string }> = [];
+        const r = await runCli(['mcp', await unpinnedProject(), '--connect'], FIXTURES, {
+          confirm: async (question, opts) => {
+            asked.push({ question, exact: opts?.exact });
+            return false;
+          },
+        });
+        expect(asked).toHaveLength(1);
+        expect(asked[0]!.exact).toBe('yes');
+        expect(r.code).toBe(2);
+      });
+    });
+
+    it('MCP-002 --update-lock keeps saved hashes for servers that were skipped', async () => {
+      const { root } = await twoServers();
+      await mkdir(join(root, '.surfscan'));
+      const old = { version: 1, servers: { b: { saved: 'sha256:abc' } } };
+      await writeFile(join(root, '.surfscan', 'mcp.lock.json'), JSON.stringify(old));
+      const answers = [true, false];
+      await runCli(['mcp', root, '--connect', '--update-lock'], FIXTURES, { confirm: async () => answers.shift()! });
+      const lock = JSON.parse(await readFile(join(root, '.surfscan', 'mcp.lock.json'), 'utf8'));
+      expect(Object.keys(lock.servers)).toEqual(['a', 'b']);
+      expect(lock.servers.b).toEqual({ saved: 'sha256:abc' });
     }, 30_000);
   });
 

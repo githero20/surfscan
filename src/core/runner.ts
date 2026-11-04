@@ -46,6 +46,7 @@ export function listTargets(
 
 export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<ScanResult> {
   const warnings: string[] = [];
+  let incomplete = false;
   const paths = await scanner.findTargets(opts.provider, opts.config);
 
   const files: SourceFile[] = [];
@@ -55,6 +56,7 @@ export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<Sc
       if (content !== undefined) files.push({ path, content });
     } catch (err) {
       warnings.push(`${path}: skipped (${(err as Error).message})`);
+      incomplete = true;
     }
   }
 
@@ -63,7 +65,10 @@ export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<Sc
     config: opts.config,
     provider: opts.provider,
     options: opts.options ?? {},
-    warn: (message) => warnings.push(message),
+    warn: (message, warnOpts) => {
+      warnings.push(message);
+      if (warnOpts?.incomplete) incomplete = true;
+    },
   };
 
   const ignored = new Set(opts.config.ignore);
@@ -74,21 +79,24 @@ export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<Sc
       findings.push(...(await rule.check(context)));
     } catch (err) {
       warnings.push(`${rule.id}: rule failed (${(err as Error).message})`);
+      incomplete = true;
     }
   }
 
-  return { findings: sortFindings(findings), warnings };
+  return { findings: sortFindings(findings), warnings, incomplete };
 }
 
 export async function runScanners(scanners: Scanner[], opts: RunOptions): Promise<ScanResult> {
   const findings: Finding[] = [];
   const warnings: string[] = [];
+  let incomplete = false;
   for (const scanner of scanners) {
     const result = await runScanner(scanner, opts);
     findings.push(...result.findings);
     warnings.push(...result.warnings);
+    incomplete ||= result.incomplete;
   }
-  return { findings: sortFindings(findings), warnings };
+  return { findings: sortFindings(findings), warnings, incomplete };
 }
 
 export function summarize(findings: Finding[]): Record<Severity, number> {

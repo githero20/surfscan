@@ -15,10 +15,11 @@ import { SEVERITIES } from '../core/types.js';
 import type { Scanner, Severity, SourceProvider, SurfscanConfig } from '../core/types.js';
 import { approvalsScanner } from '../scanners/approvals/index.js';
 import { depsScanner } from '../scanners/deps/index.js';
+import type { FetchLike } from '../scanners/deps/registry.js';
 import { keysScanner } from '../scanners/keys/index.js';
 import { parseMcpConfig, type McpServer } from '../scanners/mcp/config.js';
-import { findMcpTargets, mcpScanner } from '../scanners/mcp/index.js';
-import { buildLock, LOCK_FILE_PATH, parseToolList, type ToolSource } from '../scanners/mcp/tools.js';
+import { findMcpTargets, mcpScanner, unpinnedTarget } from '../scanners/mcp/index.js';
+import { buildLock, LOCK_FILE_PATH, parseLock, parseToolList, type ToolSource } from '../scanners/mcp/tools.js';
 import { connectToServers } from './connect.js';
 import { rulesScanner } from '../scanners/rules/index.js';
 import pkg from '../../package.json' with { type: 'json' };
@@ -34,7 +35,9 @@ export interface CliIO {
   env: Record<string, string | undefined>;
   isTTY: boolean;
   /** Ask the user a yes/no question. Absent when nobody can answer. */
-  confirm?(question: string): Promise<boolean>;
+  confirm?(question: string, opts?: { exact?: string }): Promise<boolean>;
+  /** Replaces global fetch for registry lookups. Used by tests so none touch the network. */
+  fetch?: FetchLike;
 }
 
 interface CommonOptions {
@@ -42,10 +45,12 @@ interface CommonOptions {
   failOn: Severity;
   config?: string;
   color: boolean;
+  strict?: boolean;
   offline?: boolean;
   tools?: string;
   connect?: boolean;
   yes?: boolean;
+  allowUnpinned?: boolean;
   updateLock?: boolean;
 }
 
@@ -99,17 +104,56 @@ async function configuredServers(provider: SourceProvider, config: SurfscanConfi
   return servers;
 }
 
-async function connectSource(provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<ToolSource> {
+/** Env names a server will receive from its config, marking the ones copied from your shell. Never values. */
+function describeEnv(server: McpServer): string {
+  const names = Object.entries(server.env).map(([key, value]) => {
+    const fromShell = [...value.matchAll(/\$\{(?:env:)?([A-Za-z_]\w*)\}/g)].map((m) => `$${m[1]}`);
+    return fromShell.length > 0 ? `${key} (from your shell: ${fromShell.join(', ')})` : key;
+  });
+  return names.length > 0 ? names.join(', ') : 'none';
+}
+
+async function connectSource(
+  provider: SourceProvider,
+  config: SurfscanConfig,
+  opts: CommonOptions,
+  io: CliIO,
+): Promise<{ source: ToolSource; notChecked: string[] }> {
   const servers = await configuredServers(provider, config, io);
-  const local = servers.filter((s) => s.command);
-  io.stderr('WARNING: --connect runs third-party code on this machine. It will launch:\n');
-  for (const s of local) io.stderr(`  ${safeText(s.name)}: ${safeText([s.command!, ...s.args].join(' '))}\n`);
-  if (!opts.yes) {
-    const approved = io.confirm ? await io.confirm('Launch these servers? [y/N] ') : false;
-    if (!approved) throw new UsageError('--connect needs confirmation; nothing was launched (pass --yes to skip the question)');
-  }
   const warn = (message: string): void => io.stderr(`warning: ${safeText(message)}\n`);
-  return { tools: await connectToServers(servers, io.env, warn) };
+  io.stderr('WARNING: --connect runs third-party code on this machine.\n');
+  io.stderr('Each server gets a minimal environment (PATH, HOME, temp folders, proxy and certificate settings)\n');
+  io.stderr('plus the variables listed under env. Your other shell variables are not passed on.\n\n');
+
+  const approved: McpServer[] = [];
+  for (const s of servers) {
+    if (!s.command) {
+      warn(`${s.name}: skipped, --connect only launches local servers, not remote URLs`);
+      continue;
+    }
+    const target = unpinnedTarget(s);
+    io.stderr(`${safeText(s.name)}\n  runs: ${safeText([s.command, ...s.args].join(' '))}\n  env:  ${safeText(describeEnv(s))}\n`);
+    if (target) io.stderr(`  NOT PINNED: it runs whatever is newest (${safeText(target)}), which may differ from what you reviewed\n`);
+
+    if (opts.yes) {
+      if (target && !opts.allowUnpinned) {
+        warn(`${s.name}: skipped because it is not pinned (pin a version, or pass --allow-unpinned)`);
+      } else {
+        approved.push(s);
+      }
+      continue;
+    }
+    if (!io.confirm) throw new UsageError('--connect needs confirmation; nothing was launched (pass --yes to skip the question)');
+    const ok = target
+      ? await io.confirm('  Not pinned. Type "yes" to launch it anyway: ', { exact: 'yes' })
+      : await io.confirm('  Launch this server? [y/N] ');
+    if (ok) approved.push(s);
+    else io.stderr('  skipped\n');
+  }
+  if (approved.length === 0) throw new UsageError('--connect: no servers were launched');
+
+  const tools = await connectToServers(approved, io.env, warn);
+  return { source: { tools }, notChecked: servers.map((s) => s.name).filter((name) => !(name in tools)) };
 }
 
 async function loadToolSource(root: string, provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<ToolSource | undefined> {
@@ -119,8 +163,9 @@ async function loadToolSource(root: string, provider: SourceProvider, config: Su
   }
 
   let source: ToolSource | undefined;
+  let notChecked: string[] = [];
   if (opts.connect) {
-    source = await connectSource(provider, config, opts, io);
+    ({ source, notChecked } = await connectSource(provider, config, opts, io));
   } else if (opts.tools) {
     const content = await readIfExists(resolve(io.cwd, opts.tools));
     if (content === undefined) throw new UsageError(`tool list not found: ${opts.tools}`);
@@ -134,7 +179,19 @@ async function loadToolSource(root: string, provider: SourceProvider, config: Su
   if (source && opts.updateLock) {
     const path = join(root, LOCK_FILE_PATH);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(await buildLock(source.tools), null, 2)}\n`);
+    const lock = await buildLock(source.tools);
+    // Servers that were skipped or failed to start keep their saved hashes, so a partial run cannot erase them.
+    const saved = notChecked.length > 0 ? await readIfExists(path) : undefined;
+    if (saved !== undefined) {
+      try {
+        const previous = parseLock(saved);
+        for (const name of notChecked) if (previous.servers[name] && !lock.servers[name]) lock.servers[name] = previous.servers[name]!;
+        lock.servers = Object.fromEntries(Object.entries(lock.servers).sort(([a], [b]) => a.localeCompare(b)));
+      } catch {
+        // An unreadable old lock is replaced, as before.
+      }
+    }
+    await writeFile(path, `${JSON.stringify(lock, null, 2)}\n`);
     io.stderr(`wrote ${LOCK_FILE_PATH}\n`);
   }
   return source;
@@ -152,19 +209,25 @@ async function runCommand(name: string, pathArg: string | undefined, opts: Commo
   const result = await runScanners(COMMANDS[name]!.scanners, {
     provider,
     config,
-    options: { offline: opts.offline === true, toolSource },
+    options: { offline: opts.offline === true, toolSource, ...(io.fetch ? { fetch: io.fetch } : {}) },
   });
 
-  for (const w of result.warnings) io.stderr(`warning: ${escapeUnsafe(w)}\n`);
+  for (const w of result.warnings) io.stderr(`warning: ${safeText(w)}\n`);
 
   if (opts.format === 'json') {
-    io.stdout(formatJson(result.findings));
+    io.stdout(formatJson(result.findings, { warnings: result.warnings, incomplete: result.incomplete }));
   } else {
     const color = opts.color && io.isTTY && !io.env.NO_COLOR;
-    io.stdout(formatText(result.findings, { color }));
+    io.stdout(formatText(result.findings, { color, incomplete: result.incomplete }));
   }
 
-  return hasFailures(result.findings, opts.failOn) ? EXIT_FINDINGS : EXIT_OK;
+  // Findings win: exit 1 already fails the build, and says more than 2 would.
+  if (hasFailures(result.findings, opts.failOn)) return EXIT_FINDINGS;
+  if (opts.strict && result.incomplete) {
+    io.stderr('surfscan: --strict: some checks could not run, so the result is incomplete\n');
+    return EXIT_ERROR;
+  }
+  return EXIT_OK;
 }
 
 function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
@@ -186,6 +249,7 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
       .addOption(new Option('--fail-on <severity>', 'exit 1 at or above this severity').choices([...SEVERITIES]).default('high'))
       .option('--config <file>', `config file (default: ${CONFIG_FILE_NAME} in the scanned directory, if present)`)
       .option('--no-color', 'disable colored output')
+      .option('--strict', 'exit 2 if any check could not run (for example the registry was unreachable)')
       .action(async (pathArg: string, opts: CommonOptions) => {
         setExit(await runCommand(name, pathArg, opts, io));
       });
@@ -194,7 +258,8 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
       command
         .option('--tools <file>', 'exported tool list to check (MCP-001, MCP-002)')
         .option('--connect', 'launch each configured server and list its tools; runs third-party code')
-        .option('--yes', 'skip the --connect confirmation')
+        .option('--yes', 'skip the --connect confirmation (unpinned servers are still skipped)')
+        .option('--allow-unpinned', 'with --connect --yes, also launch servers that are not pinned to a version')
         .option('--update-lock', `write tool description hashes to ${LOCK_FILE_PATH}`);
     }
   }

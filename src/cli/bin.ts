@@ -2,10 +2,11 @@
 import { createInterface } from 'node:readline/promises';
 import { main } from './index.js';
 
-async function confirm(question: string): Promise<boolean> {
+async function confirm(question: string, opts?: { exact?: string }): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    return /^y(?:es)?$/i.test((await rl.question(question)).trim());
+    const answer = (await rl.question(question)).trim();
+    return opts?.exact !== undefined ? answer === opts.exact : /^y(?:es)?$/i.test(answer);
   } finally {
     rl.close();
   }

@@ -62,8 +62,12 @@ export interface ScanContext {
   provider: SourceProvider;
   /** Scanner-specific options (for example `offline` for deps). */
   options: Readonly<Record<string, unknown>>;
-  /** Report a non-fatal problem, such as an unreadable file or a network failure. */
-  warn(message: string): void;
+  /**
+   * Report a non-fatal problem, such as an unreadable file or a network failure.
+   * Pass `incomplete: true` when the problem meant a check could not run, so
+   * the result cannot be read as "nothing found".
+   */
+  warn(message: string, opts?: { incomplete?: boolean }): void;
 }
 
 export interface Rule {
@@ -83,4 +87,6 @@ export interface Scanner {
 export interface ScanResult {
   findings: Finding[];
   warnings: string[];
+  /** True when at least one check could not run (for example the registry was unreachable). */
+  incomplete: boolean;
 }
