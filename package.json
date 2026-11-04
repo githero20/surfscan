@@ -12,6 +12,15 @@
     "scanner"
   ],
   "license": "MIT",
+  "author": "Omogbai Atakpu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/githero20/surfscan.git"
+  },
+  "bugs": {
+    "url": "https://github.com/githero20/surfscan/issues"
+  },
+  "homepage": "https://github.com/githero20/surfscan#readme",
   "type": "module",
   "bin": {
     "surfscan": "dist/cli/bin.js"
@@ -27,6 +36,8 @@
   "files": [
     "dist",
     "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
     "docs"
   ],
   "engines": {
@@ -34,6 +45,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -44,7 +56,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
-    "@typescript/typescript6": "^6.0.2",
     "tsup": "^9.0.0",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
