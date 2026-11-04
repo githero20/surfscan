@@ -8,13 +8,47 @@ Every finding has a rule ID, severity, file and line, and a fix hint. It works o
 
 ## Install
 
-Requires Node 20 or later. surfscan is not published to npm yet, so build it from source:
+Requires Node 20 or later.
+
+Run it once, without installing:
 
 ```
-npm install
+npx surfscan scan .
+```
+
+Install it globally:
+
+```
+npm install -g surfscan
+surfscan scan .
+```
+
+Add it to a project as a dev dependency:
+
+```
+npm install --save-dev surfscan
+npx surfscan scan .
+```
+
+`npx surfscan` fetches the latest release each time it runs. To keep results repeatable, pin a version, for example `npx surfscan@0.1.0 scan .`, or install it as a dev dependency and commit the lock file.
+
+To build from source:
+
+```
+git clone https://github.com/githero20/surfscan.git
+cd surfscan
+npm ci
 npm run build
 node dist/cli/bin.js scan .
 ```
+
+### In CI or a pre-commit hook
+
+```
+npx surfscan@0.1.0 scan . --strict --fail-on high
+```
+
+Exit code 1 means a finding at or above `--fail-on`. Exit code 2 means an error, or with `--strict`, a check that could not run. See [Exit codes](#exit-codes).
 
 ## Commands
 
