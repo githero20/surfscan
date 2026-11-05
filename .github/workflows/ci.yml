@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,5 +31,14 @@ jobs:
       - name: Smoke test the built CLI
         run: node dist/cli/bin.js scan tests/fixtures/RULES-001/clean --offline --fail-on high --format json
         shell: bash
+      - name: Smoke test a reader that closes the pipe early
+        shell: bash
+        run: |
+          set +o pipefail
+          node dist/cli/bin.js scan tests/fixtures --offline --format json 2>stderr.txt | true
+          status=${PIPESTATUS[0]}
+          cat stderr.txt
+          if grep -E 'EPIPE|Unhandled' stderr.txt; then exit 1; fi
+          test "$status" = 1
       - name: Check the package contents
         run: npm pack --dry-run

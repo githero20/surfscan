@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
-import { main } from './index.js';
+import { ignoreClosedPipe, main } from './index.js';
+
+ignoreClosedPipe(process.stdout);
+ignoreClosedPipe(process.stderr);
 
 async function confirm(question: string, opts?: { exact?: string }): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });

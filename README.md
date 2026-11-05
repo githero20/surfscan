@@ -4,7 +4,7 @@ Attack surface scanner for AI-assisted development.
 
 surfscan is a local, read-only CLI that checks a project for the ways AI coding agents widen its attack surface: what agents read (instruction files, MCP configs), what they install (dependencies), what they can reach (keys and secrets), and what they can run without asking (auto-approved commands).
 
-Every finding has a rule ID, severity, file and line, and a fix hint. It works on a developer machine, in a pre-commit hook and in CI.
+Every finding has a rule ID, severity, file, line where one applies, and a fix hint. It works on a developer machine, in a pre-commit hook and in CI.
 
 ## Install
 
@@ -88,7 +88,7 @@ Options for `mcp`:
 
 ### Checking MCP tool descriptions
 
-Tool descriptions are not in config files; they come from the running server. MCP-001 and MCP-002 therefore need a tool list, and `surfscan mcp` and `surfscan scan` skip them without one.
+Tool descriptions are not in config files; they come from the running server. MCP-001 and MCP-002 therefore need a tool list, and `surfscan mcp` and `surfscan scan` skip them without one. `scan` cannot take a tool list, so run `surfscan mcp --tools` as well. This skip does not count as incomplete, so `--strict` still passes.
 
 A tool list can be a `tools/list` result (`{ "tools": [...] }`, optionally inside a JSON-RPC `result`), a bare array, or `{ "servers": { "<name>": { "tools": [...] } } }`.
 
@@ -144,7 +144,7 @@ Details, examples and detection choices for each rule are in [docs/rules.md](doc
 | --- | --- |
 | 0 | Nothing at or above `--fail-on` |
 | 1 | At least one finding at or above `--fail-on` |
-| 2 | Usage or runtime error |
+| 2 | Usage or runtime error, or with `--strict`, a check that could not run |
 
 If the registry cannot be reached, `deps` prints a warning to stderr and reports only what it could check. By default the exit code does not change, so exit 0 means "nothing found among the checks that ran", not "verified". The text report ends with an `Incomplete:` line, and the JSON report has `"complete": false` and a `warnings` array.
 
@@ -180,8 +180,9 @@ When a `surfscan.json` in the scanned directory turns checks off, surfscan says 
 ## What surfscan does not do
 
 - It does not check keys against providers. "Live" refers to a key's format.
-- It does not execute project or agent code. The one exception is `mcp --connect`, which is opt-in and asks first.
+- It does not execute project or agent code. The one exception is `mcp --connect`, which is opt-in and asks first unless you pass `--yes`.
 - It does not fix anything. The only file it writes is the MCP lock file, and only with `--update-lock`.
+- It does not cover every agent or file. It reads the files listed in [docs/rules.md](docs/rules.md), so others, such as `GEMINI.md` and `.claude/commands`, are not scanned. `approvals` reads Claude Code settings only, and does not check `hooks` or `apiKeyHelper`. A clean result says nothing about what it does not read.
 - It does not replace code review. Detection is static pattern matching, with the false positives and false negatives described in [docs/rules.md](docs/rules.md).
 
 Only `deps`, and `scan` because it runs `deps`, uses the network. They contact npm's registry and download count endpoints and send package names only.

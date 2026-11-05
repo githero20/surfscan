@@ -307,6 +307,16 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
   return program;
 }
 
+/**
+ * Keep running when the reader goes away, as in `surfscan scan . | head`. The
+ * exit code still reflects the scan, so a closed pipe cannot hide a finding.
+ */
+export function ignoreClosedPipe(stream: Pick<NodeJS.WriteStream, 'on'>): void {
+  stream.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code !== 'EPIPE') throw err;
+  });
+}
+
 /** Run the CLI. Returns the process exit code; never calls process.exit. */
 export async function main(argv: string[], io: CliIO): Promise<number> {
   let exitCode = EXIT_OK;

@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { ignoreClosedPipe } from '../src/cli/index.js';
 import type { FetchLike } from '../src/scanners/deps/registry.js';
 import { FIXTURES, fixture, materialize, runCli } from './helpers.js';
 
@@ -254,6 +256,22 @@ describe('cli: --format json for every command', () => {
     expect(r.stdout).toContain('No findings\n');
     expect(r.stdout).not.toContain('warning:');
     expect(r.stderr).toContain('warning:');
+  });
+});
+
+describe('cli: a reader that closes the pipe', () => {
+  const failure = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code });
+
+  it('ignores a closed pipe', () => {
+    const stream = new EventEmitter();
+    ignoreClosedPipe(stream as unknown as NodeJS.WriteStream);
+    expect(() => stream.emit('error', failure('EPIPE'))).not.toThrow();
+  });
+
+  it('does not hide any other output error', () => {
+    const stream = new EventEmitter();
+    ignoreClosedPipe(stream as unknown as NodeJS.WriteStream);
+    expect(() => stream.emit('error', failure('ENOSPC'))).toThrow('ENOSPC');
   });
 });
 
