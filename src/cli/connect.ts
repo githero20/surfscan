@@ -3,7 +3,8 @@
  * runs third-party code, so it lives in the CLI layer and only runs after the
  * user confirms.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { join } from 'node:path';
 import type { McpServer } from '../scanners/mcp/config.js';
 import { parseToolList, UNNAMED_SERVER, type McpTool, type ToolList } from '../scanners/mcp/tools.js';
 
@@ -41,20 +42,44 @@ export function buildChildEnv(server: McpServer, shellEnv: NodeJS.ProcessEnv): N
   for (const [key, value] of Object.entries(shellEnv)) {
     if (value !== undefined && BASE_ENV_ALLOWLIST.has(key.toLowerCase())) env[key] = value;
   }
-  // ${VAR} in the config is the one explicit way for a shell variable to reach a server.
+  // ${VAR} in the env block is the one way for a shell variable to reach a server. The prompt shows
+  // those names. Commands and arguments are not expanded: anyone can read a command line.
   for (const [key, value] of Object.entries(server.env)) env[key] = expand(value, shellEnv);
   return env;
+}
+
+/**
+ * Stop a server and release its pipes, so surfscan can exit even if something
+ * the server started keeps running. On Windows the server is a child of the
+ * shell, so the whole tree has to go. taskkill is named by full path because
+ * Windows searches the current folder, which here is a project being scanned.
+ */
+function stopServer(child: ChildProcessWithoutNullStreams): void {
+  child.stdin.destroy();
+  const systemRoot = process.env.SystemRoot;
+  if (process.platform === 'win32' && child.pid !== undefined && systemRoot) {
+    spawnSync(join(systemRoot, 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  }
+  child.kill();
+  child.stdout.destroy();
+  child.unref();
 }
 
 /** Launch one server over stdio, list its tools, then stop it. */
 export function listServerTools(server: McpServer, baseEnv: NodeJS.ProcessEnv): Promise<McpTool[]> {
   return new Promise((resolve, reject) => {
     const env = buildChildEnv(server, baseEnv);
-    const command = expand(server.command!, baseEnv);
-    const args = server.args.map((a) => expand(a, baseEnv));
+    // Not expanded, so that a shell variable cannot reach a command line. See buildChildEnv.
+    const command = server.command!;
+    const args = server.args;
 
     // npx and similar are .cmd files on Windows, which only a shell can start.
     const windows = process.platform === 'win32';
+    // cmd.exe expands %VAR% even inside quotes, so what ran would differ from what the user approved.
+    if (windows && [command, ...args].some((part) => /%[^%\s]+%/.test(part))) {
+      reject(new Error('%VAR% in a command or argument cannot be passed safely on Windows'));
+      return;
+    }
     const child = windows
       ? spawn([command, ...args].map(winQuote).join(' '), { env, shell: true, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
       : spawn(command, args, { env, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -62,11 +87,12 @@ export function listServerTools(server: McpServer, baseEnv: NodeJS.ProcessEnv): 
     const tools: unknown[] = [];
     let buffer = '';
     let received = 0;
+    let finished = false;
     const finish = (err: Error | undefined): void => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
-      // Closing stdin is how stdio servers are told to stop; kill alone misses a child of the Windows shell.
-      child.stdin.end();
-      child.kill();
+      stopServer(child as unknown as ChildProcessWithoutNullStreams);
       if (err) reject(err);
       else resolve(parseToolList(JSON.stringify({ tools }))[UNNAMED_SERVER]!);
     };
@@ -87,18 +113,22 @@ export function listServerTools(server: McpServer, baseEnv: NodeJS.ProcessEnv): 
       while ((newline = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        let message: { id?: unknown; error?: { message?: unknown }; result?: { tools?: unknown; nextCursor?: unknown } };
+        let parsed: unknown;
         try {
-          message = JSON.parse(line);
+          parsed = JSON.parse(line);
         } catch {
           continue;
         }
+        // Valid JSON is not always a message: a server can print null or 42.
+        if (typeof parsed !== 'object' || parsed === null) continue;
+        const message = parsed as { id?: unknown; error?: { message?: unknown }; result?: { tools?: unknown; nextCursor?: unknown } };
         if (message.error) return finish(new Error(String(message.error.message)));
         if (message.id === 1) {
           send({ method: 'notifications/initialized' });
           send({ id: 2, method: 'tools/list', params: {} });
         } else if (message.id === 2) {
-          if (Array.isArray(message.result?.tools)) tools.push(...message.result.tools);
+          // Not push(...tools): a long enough page would overflow the call stack.
+          if (Array.isArray(message.result?.tools)) for (const tool of message.result.tools) tools.push(tool);
           const cursor = message.result?.nextCursor;
           if (typeof cursor === 'string' && cursor) send({ id: 2, method: 'tools/list', params: { cursor } });
           else return finish(undefined);

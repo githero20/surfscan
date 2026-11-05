@@ -50,6 +50,8 @@ npx surfscan@0.1.0 scan . --strict --fail-on high
 
 Exit code 1 means a finding at or above `--fail-on`. Exit code 2 means an error, or with `--strict`, a check that could not run. See [Exit codes](#exit-codes).
 
+When CI scans pull requests, add `--no-config`, or pass your own `--config <file>` from outside the repo. A pull request can change the `surfscan.json` in the scanned directory, and that file can turn checks off.
+
 ## Commands
 
 Each command takes an optional path, which defaults to `.`.
@@ -68,6 +70,7 @@ Options for every command:
 - `--format text|json`: output format (default `text`)
 - `--fail-on high|medium|low|info`: exit 1 at or above this severity (default `high`)
 - `--config <file>`: config file (default `surfscan.json` in the scanned directory, if present)
+- `--no-config`: ignore any `surfscan.json` in the scanned directory
 - `--no-color`: disable colored output
 - `--strict`: exit 2 if any check could not run (see Exit codes)
 
@@ -93,7 +96,8 @@ A tool list can be a `tools/list` result (`{ "tools": [...] }`, optionally insid
 
 - It shows each server's command and the names of its `env` variables, then asks about that server alone. You can approve some and skip others. It refuses when nobody can answer, unless you pass `--yes`.
 - A server that is not pinned to a version (for example `npx some-server`) runs whatever is newest, so it needs you to type the full word `yes`. With `--yes`, unpinned servers are skipped unless you also pass `--allow-unpinned`.
-- Servers start with a minimal environment: `PATH`, home and temp folders, and proxy and certificate settings. Your other shell variables, such as tokens, are not passed on. The only way to give a server one is a `${VAR}` reference in its `env` block, and the prompt shows those names.
+- Servers start with a minimal environment: `PATH`, home and temp folders, and proxy and certificate settings. Your other shell variables, such as tokens, are not passed on. The only way to give a server one is a `${VAR}` reference in its `env` block, and the prompt shows those names. `${VAR}` in a command or argument is passed as written, because anyone on the machine can read a command line. On Windows, a server with `%VAR%` in its command or arguments is not launched, because the shell would change what you approved.
+- Remote specs (`github:`, `git+https:`, tarball URLs) count as unpinned unless they name a full commit hash, because what they point at can change.
 - With `--update-lock`, servers that were skipped or failed to start keep their saved hashes.
 
 This reduces what a server can reach; it is not a sandbox. A launched server can still read your files and use your network. To check servers you do not trust, run `--connect` in a container or throwaway machine, save the lock, and use `--tools` elsewhere.
@@ -144,7 +148,14 @@ Details, examples and detection choices for each rule are in [docs/rules.md](doc
 
 If the registry cannot be reached, `deps` prints a warning to stderr and reports only what it could check. By default the exit code does not change, so exit 0 means "nothing found among the checks that ran", not "verified". The text report ends with an `Incomplete:` line, and the JSON report has `"complete": false` and a `warnings` array.
 
-In CI, pass `--strict`. If any check could not run (registry unreachable, a file too large to read, a rule that failed), surfscan exits 2 instead of 0. Findings still take priority: exit 1 wins over exit 2. `--offline` is a choice, so it does not count as incomplete.
+In CI, pass `--strict`. If any check could not run, surfscan exits 2 instead of 0. Findings still take priority: exit 1 wins over exit 2. `--offline` is a choice, so it does not count as incomplete. These count as a check that could not run:
+
+- The registry could not be reached.
+- A config, manifest or lock file could not be parsed.
+- A file was too large to read. The limit is 2 MiB, or 32 MiB for the files `deps` and `keys` read, since lock files and data files are often large. Exclude a generated file with `ignorePaths`.
+- A link was not followed: a link to an agent folder such as `.claude`, or to a file outside the project. A link to a file inside the project is scanned.
+- With `--connect`, a server failed, or `--yes` skipped it for not being pinned.
+- A rule failed.
 
 ## Config
 
@@ -163,6 +174,8 @@ In CI, pass `--strict`. If any check could not run (registry unreachable, a file
 - `deps.minAgeDays`: DEPS-004 threshold in days (default 30)
 
 Unknown keys are rejected with an error.
+
+When a `surfscan.json` in the scanned directory turns checks off, surfscan says which ones in a warning, on stderr and in the JSON `warnings` array. A file you pass with `--config` is your own choice, so it gets no warning.
 
 ## What surfscan does not do
 

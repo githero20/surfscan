@@ -118,7 +118,7 @@ describe('documentation', () => {
 
   it('documents every command and every option', () => {
     for (const command of ['rules', 'mcp', 'deps', 'keys', 'approvals', 'scan']) expect(readme).toContain(`\`${command}\``);
-    for (const option of ['--format', '--fail-on', '--config', '--no-color', '--strict', '--offline', '--tools', '--connect', '--yes', '--allow-unpinned', '--update-lock']) {
+    for (const option of ['--format', '--fail-on', '--config', '--no-config', '--no-color', '--strict', '--offline', '--tools', '--connect', '--yes', '--allow-unpinned', '--update-lock']) {
       expect(readme, option).toContain(option);
     }
   });

@@ -10,4 +10,4 @@ First release.
 - `--fail-on` threshold and `--strict`, which exits 2 when a check could not run.
 - `deps --offline` for local-only checks.
 - `mcp --tools` to check an exported tool list, `--update-lock` to save description hashes, and opt-in `--connect` to list tools from local servers (per-server confirmation, minimal environment, unpinned servers need explicit approval).
-- `surfscan.json` config with `ignore`, `ignorePaths` and `deps.minAgeDays`.
+- `surfscan.json` config with `ignore`, `ignorePaths` and `deps.minAgeDays`. A config in the scanned project that turns checks off is reported, and `--no-config` ignores it.

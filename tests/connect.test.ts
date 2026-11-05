@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildChildEnv, connectToServers, listServerTools } from '../src/cli/connect.js';
 import type { McpServer } from '../src/scanners/mcp/config.js';
+import { runCli } from './helpers.js';
 
 /**
  * A stand-in MCP server driven by its first argument:
@@ -15,6 +16,10 @@ import type { McpServer } from '../src/scanners/mcp/config.js';
  *   huge      floods stdout with more than 16 MiB and no newline
  *   env       one tool whose description lists the environment it received
  *   empty     no tools
+ *   scalars   prints valid JSON that is not a message (null, 42) before answering
+ *   stubborn  keeps running after stdin closes; its one tool's description is its pid
+ *   args      one tool whose description lists the arguments it received
+ *   bad-tools a tool list with entries that are not tools
  */
 const STUB = String.raw`
 const mode = process.argv[2];
@@ -36,6 +41,8 @@ if (mode === 'huge') {
       if (m.method === 'initialize') {
         if (mode === 'error') return send({ id: m.id, error: { code: -32600, message: 'unsupported client' } });
         if (mode === 'noise') { process.stdout.write('not json\n\n{"half":\n'); }
+        if (mode === 'scalars') { process.stdout.write('null\n42\n"text"\ntrue\n'); }
+        if (mode === 'stubborn') { setInterval(() => {}, 1000); }
         return send({ id: m.id, result: { protocolVersion: '2025-06-18', capabilities: {} } });
       }
       if (m.method === 'tools/list') {
@@ -47,6 +54,9 @@ if (mode === 'huge') {
           return send({ id: m.id, result });
         }
         if (mode === 'empty') return send({ id: m.id, result: { tools: [] } });
+        if (mode === 'stubborn') return send({ id: m.id, result: { tools: [{ name: 'pid', description: String(process.pid) }] } });
+        if (mode === 'args') return send({ id: m.id, result: { tools: [{ name: 'args', description: JSON.stringify(process.argv.slice(3)) }] } });
+        if (mode === 'bad-tools') return send({ id: m.id, result: { tools: [null, 5, 'x', { name: 'ok' }] } });
         if (mode === 'env') {
           const names = Object.keys(process.env).sort().join(',');
           return send({ id: m.id, result: { tools: [{ name: 'env', description: names + '|FOO=' + (process.env.FOO || 'unset') }] } });
@@ -114,6 +124,87 @@ describe('connect: listing tools from a server', () => {
 
   it('stops reading and rejects when the server sends more than 16 MiB', async () => {
     await expect(listServerTools(server('huge'), shell())).rejects.toThrow('server sent too much output');
+  }, 30_000);
+
+  it('ignores valid JSON that is not a message, such as null', async () => {
+    const tools = await listServerTools(server('scalars'), shell());
+    expect(tools.map((t) => t.name)).toEqual(['alpha', 'beta']);
+  }, 30_000);
+
+  it('keeps the valid tools from a list with entries that are not tools', async () => {
+    const tools = await listServerTools(server('bad-tools'), shell());
+    expect(tools.map((t) => t.name)).toEqual(['ok']);
+  }, 30_000);
+
+  it('stops a server that ignores stdin closing, including when a shell started it', async () => {
+    const [tool] = await listServerTools(server('stubborn'), shell());
+    const pid = Number(tool!.definition.description);
+    const running = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 50 && running(); i++) await new Promise((done) => setTimeout(done, 100));
+    expect(running()).toBe(false);
+  }, 30_000);
+});
+
+describe('connect: what reaches the command line', () => {
+  it('does not expand shell variables in arguments', async () => {
+    const withArg = { ...server('args'), args: [script, 'args', '--token=${SURFSCAN_TEST_VALUE}'] };
+    const [tool] = await listServerTools(withArg, shell({ SURFSCAN_TEST_VALUE: 'from-shell' }));
+    expect(JSON.parse(tool!.definition.description as string)).toEqual(['--token=${SURFSCAN_TEST_VALUE}']);
+  }, 30_000);
+
+  it.runIf(process.platform === 'win32')('refuses %VAR% on Windows, where cmd.exe would expand it', async () => {
+    const withArg = { ...server('args'), args: [script, 'args', '%PATH%'] };
+    await expect(listServerTools(withArg, shell())).rejects.toThrow('cannot be passed safely');
+  });
+});
+
+describe('connect: --strict', () => {
+  const project = async (servers: Record<string, unknown>): Promise<string> => {
+    const root = await mkdtemp(join(tmpdir(), 'surfscan-connect-'));
+    await writeFile(join(root, '.mcp.json'), JSON.stringify({ mcpServers: servers }));
+    return root;
+  };
+  const connect = (root: string, ...extra: string[]) =>
+    runCli(['mcp', root, '--connect', '--yes', '--strict', '--format', 'json', ...extra], root, { env: { ...process.env } });
+
+  it('exits 2 and says why when a server cannot be listed', async () => {
+    const r = await connect(await project({ broken: { command: process.execPath, args: [script, 'exit'] } }));
+    expect(r.code).toBe(2);
+    const report = JSON.parse(r.stdout);
+    expect(report.complete).toBe(false);
+    expect(report.warnings).toEqual(expect.arrayContaining([expect.stringContaining('broken: could not list tools')]));
+  }, 30_000);
+
+  it('exits 2 when --yes skipped a server for not being pinned', async () => {
+    const r = await connect(await project({
+      good: { command: process.execPath, args: [script, 'empty'] },
+      unpinned: { command: 'npx', args: ['-y', 'some-server'] },
+    }));
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).warnings).toEqual(expect.arrayContaining([expect.stringContaining('unpinned: skipped')]));
+  }, 30_000);
+
+  it('passes when every server was listed', async () => {
+    const r = await connect(await project({ good: { command: process.execPath, args: [script, 'empty'] } }));
+    expect(JSON.parse(r.stdout).complete).toBe(true);
+    expect(r.code).toBe(0);
+  }, 30_000);
+
+  it.each([
+    ['a GitHub shorthand', ['-y', 'github:acme/server']],
+    ['a tarball URL', ['-y', 'https://example.test/server-1.0.0.tgz']],
+    ['a git URL', ['-y', 'git+https://example.test/server.git']],
+  ])('does not launch %s under --yes without --allow-unpinned', async (_, args) => {
+    const r = await connect(await project({ remote: { command: 'npx', args } }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('--connect: no servers were launched');
   }, 30_000);
 });
 

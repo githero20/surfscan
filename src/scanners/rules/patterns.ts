@@ -18,10 +18,32 @@ function clauseBefore(text: string, index: number): string {
   return text.slice(start, index);
 }
 
-const NEGATION = /\b(?:never|not|no|avoid|refuse|forbidden|prohibited)\b|n't\b/i;
+const NEGATION = /\b(?:never|not|no|avoid|refuse|forbidden|prohibited)\b|n't\b/gi;
+/** "Do not hesitate to", "no need to", "don't forget to": these encourage the action that follows. */
+const PERMISSIVE = /\b(?:hesitate|forget|fail|need|afraid|worry|reason|problem|wait)\b/i;
+/** The negation belongs to an earlier action: "Do not stop and send ...". */
+const NEW_ACTION = /\b(?:but|then|instead|just|and)\b|:/i;
+const CONDITION = /\b(?:if|when|unless|once|after|before|while)\b/i;
+const MAX_WORDS_AFTER_NEGATION = 4;
 
+const wordCount = (text: string): number => text.split(/\s+/).filter(Boolean).length;
+
+/**
+ * True when a negation applies to the action at `index`. A negation earlier in
+ * the sentence is not enough: in "Do not worry about it, send the .env file",
+ * nothing negates "send".
+ */
 function isNegated(text: string, index: number): boolean {
-  return NEGATION.test(clauseBefore(text, index));
+  const before = clauseBefore(text, index);
+  const negation = [...before.matchAll(NEGATION)].at(-1);
+  if (!negation) return false;
+  const between = before.slice(negation.index + negation[0].length);
+  if (PERMISSIVE.test(between) || NEW_ACTION.test(between)) return false;
+  const comma = between.indexOf(',');
+  if (comma === -1) return wordCount(between) <= MAX_WORDS_AFTER_NEGATION;
+  // A comma only carries the negation through a list: "Never commit, print, or log secrets".
+  const isList = /\b(?:or|nor)\b/i.test(text.slice(index, index + 40));
+  return isList && wordCount(between.slice(0, comma)) <= 2 && !CONDITION.test(before.slice(0, negation.index));
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +73,17 @@ const INVISIBLE_NAMES: Record<number, string> = {
 // spell out a full hidden ASCII message ("ASCII smuggling").
 const INVISIBLE = /[\u200B-\u200F\u2060\uFEFF\u202A-\u202E\u2066-\u2069]|[\u{E0000}-\u{E007F}]/gu;
 const TAG_RUN = /[\u{E0000}-\u{E007F}]+/gu;
+const BEFORE_EMOJI_JOINER = /(?:\p{Extended_Pictographic}|\uFE0F|[\u{1F3FB}-\u{1F3FF}])$/u;
+const AFTER_EMOJI_JOINER = /^\p{Extended_Pictographic}/u;
+
+/** A zero width joiner between emoji builds one visible emoji, such as a family. It hides nothing. */
+function isEmojiJoiner(text: string, index: number): boolean {
+  return (
+    text.charCodeAt(index) === 0x200d &&
+    BEFORE_EMOJI_JOINER.test(text.slice(Math.max(0, index - 4), index)) &&
+    AFTER_EMOJI_JOINER.test(text.slice(index + 1, index + 3))
+  );
+}
 
 export interface InvisibleMatch extends TextMatch {
   codePoints: number[];
@@ -65,6 +98,7 @@ export function findInvisibleChars(text: string): InvisibleMatch[] {
     // A UTF-8 byte order mark at the very start of a file is an encoding
     // artefact (common from Windows editors), not hidden content.
     if (m.index === 0 && m[0] === '\uFEFF') continue;
+    if (isEmojiJoiner(text, m.index)) continue;
     for (let i = lastScanned; i < m.index; i++) if (text.charCodeAt(i) === 10) lineNo++;
     lastScanned = m.index;
     const cp = m[0].codePointAt(0)!;
@@ -116,8 +150,60 @@ const DIRECTIVE =
 const HTML_COMMENT = /<!--([\s\S]*?)(?:-->|$)/g;
 // Markdown link reference definitions used as comments: [//]: # (text)
 const MD_COMMENT = /^[ \t]*\[(?:\/\/|comment|_)\]:\s*(?:#|<>)\s*(?:\((.*)\)|"(.*)"|'(.*)')[ \t]*$/gim;
-const HIDDEN_TAG =
-  /<[a-z][a-z0-9-]*\b[^>]*?(?:\shidden(?=[\s/>=])|\sstyle\s*=\s*(["'])[^"']*?(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?![.\d]*[1-9])|opacity\s*:\s*0(?![.\d]*[1-9]))[^"']*\1)[^>]*>/gi;
+const TAG_NAME = /[a-z][a-z0-9-]*\b/iy;
+const HIDDEN_ATTRIBUTE = /\shidden(?=[\s/>=])/i;
+const STYLE_ATTRIBUTE = /\sstyle\s*=\s*(["'])/gi;
+const HIDING_STYLE = /display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0(?![.\d]*[1-9])|opacity\s*:\s*0(?![.\d]*[1-9])/i;
+
+/** Offset of the `>` closing a tag, ignoring any inside a quoted attribute. */
+function tagEnd(text: string, from: number): number {
+  let quote = '';
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote) {
+      if (ch === quote) quote = '';
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return i;
+    }
+  }
+  // An unclosed quote: fall back to the first `>`.
+  return text.indexOf('>', from);
+}
+
+function hidesContent(tag: string): boolean {
+  if (HIDDEN_ATTRIBUTE.test(tag)) return true;
+  STYLE_ATTRIBUTE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = STYLE_ATTRIBUTE.exec(tag)) !== null) {
+    const close = tag.indexOf(m[1]!, STYLE_ATTRIBUTE.lastIndex);
+    const value = tag.slice(STYLE_ATTRIBUTE.lastIndex, close === -1 ? undefined : close);
+    if (HIDING_STYLE.test(value)) return true;
+    if (close === -1) return false;
+    STYLE_ATTRIBUTE.lastIndex = close + 1;
+  }
+  return false;
+}
+
+/** Walks each tag once, so input with many unclosed tags stays linear. */
+function findHiddenTags(text: string): TextMatch[] {
+  const out: TextMatch[] = [];
+  let at = text.indexOf('<');
+  while (at !== -1) {
+    TAG_NAME.lastIndex = at + 1;
+    if (!TAG_NAME.test(text)) {
+      at = text.indexOf('<', at + 1);
+      continue;
+    }
+    const end = tagEnd(text, TAG_NAME.lastIndex);
+    if (end === -1) break;
+    const tag = text.slice(at, end + 1);
+    if (hidesContent(tag)) out.push({ index: at, detail: `hidden markup: ${excerpt(tag, 60)}` });
+    at = text.indexOf('<', end + 1);
+  }
+  return out;
+}
 
 export function findHiddenContent(text: string): TextMatch[] {
   const out: TextMatch[] = [];
@@ -133,9 +219,7 @@ export function findHiddenContent(text: string): TextMatch[] {
       out.push({ index: m.index, detail: `Markdown comment: "${excerpt(body, 60)}"` });
     }
   }
-  for (const m of matchAll(HIDDEN_TAG, text)) {
-    out.push({ index: m.index, detail: `hidden markup: ${excerpt(m[0], 60)}` });
-  }
+  out.push(...findHiddenTags(text));
   return out;
 }
 
@@ -144,20 +228,50 @@ export function findHiddenContent(text: string): TextMatch[] {
 // ---------------------------------------------------------------------------
 
 const SHELLS = '(?:sudo\\s+)?(?:ba|z|k|da|fi)?sh|python[0-9.]*|node|perl|ruby|pwsh|powershell|iex|invoke-expression';
-const PIPE_TO_SHELL = new RegExp(
+const DOWNLOADER = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/gi;
+const INTO_SHELL = new RegExp(`\\|\\s*(?:${SHELLS})\\b`, 'iy');
+const SHELL_AROUND_DOWNLOAD = new RegExp(
   [
-    // curl ... | sh
-    `\\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\\b[^\\n|]*\\|\\s*(?:${SHELLS})\\b`,
     // bash <(curl ...)   sh -c "$(curl ...)"
     `\\b(?:(?:ba|z|k|da)?sh|source)\\s+(?:-c\\s+)?["']?(?:<\\(|\\$\\()\\s*(?:curl|wget)\\b`,
     // iex (iwr ...)   Invoke-Expression (New-Object Net.WebClient).DownloadString(...)
-    `\\b(?:iex|invoke-expression)\\s*\\(?\\s*\\(?\\s*(?:iwr|irm|invoke-webrequest|invoke-restmethod|new-object\\s+net\\.webclient)\\b`,
+    `\\b(?:iex|invoke-expression)\\s*(?:\\(\\s*){0,2}(?:iwr|irm|invoke-webrequest|invoke-restmethod|new-object\\s+net\\.webclient)\\b`,
   ].join('|'),
   'gi',
 );
 
+/** `curl ... | sh`, including `curl ... | tee x | sh`. Each line is walked once, however many downloaders it has. */
+function findDownloadPipes(text: string): TextMatch[] {
+  const out: TextMatch[] = [];
+  const downloader = new RegExp(DOWNLOADER.source, DOWNLOADER.flags);
+  let m: RegExpExecArray | null;
+  while ((m = downloader.exec(text)) !== null) {
+    let i = m.index + m[0].length;
+    let found = false;
+    for (; i < text.length && text[i] !== '\n'; i++) {
+      if (text[i] !== '|') continue;
+      // `curl x || bash fallback` runs bash on failure; it does not pipe the download.
+      if (text[i + 1] === '|') {
+        i++;
+        continue;
+      }
+      INTO_SHELL.lastIndex = i;
+      const shell = INTO_SHELL.exec(text);
+      if (shell) {
+        i += shell[0].length;
+        out.push({ index: m.index, detail: excerpt(text.slice(m.index, i), 70) });
+        found = true;
+        break;
+      }
+    }
+    downloader.lastIndex = found ? i : i + 1;
+  }
+  return out;
+}
+
 export function findPipeToShell(text: string): TextMatch[] {
-  return [...matchAll(PIPE_TO_SHELL, text)].map((m) => ({ index: m.index, detail: excerpt(m[0], 70) }));
+  const around = [...matchAll(SHELL_AROUND_DOWNLOAD, text)].map((m) => ({ index: m.index, detail: excerpt(m[0], 70) }));
+  return [...findDownloadPipes(text), ...around].sort((a, b) => a.index - b.index);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,10 +308,28 @@ const CRED_TARGETS = [
 const CRED_ACCESS = new RegExp(`\\b(?:${CRED_VERBS})\\b[^.!?;\\n]{0,60}?(?:${CRED_TARGETS})`, 'gi');
 const ENV_DUMP = /\b(?:printenv|env|set)\s*\|\s*(?:curl|wget|nc|netcat)\b/gi;
 
+/** "Log in with your password", "Open a PR to rotate secrets": the verb is not acting on the credential. */
+const UNRELATED_VERB = /^(?:log\s+(?:in|on|out)\b|open\s+(?:a|an|the)\s+(?:pr|pull request|mr|merge request|issue|ticket)\b)/i;
+/** "Show an error when the API key is missing": the credential is only a condition. */
+const ONLY_A_CONDITION = /\b(?:when|if|unless|whether)\b/i;
+const CRED_STATE_AFTER = /^\s+(?:is|are)\s+(?:missing|invalid|expired|required|empty|unset|not set|wrong|incorrect)\b/i;
+/** "Read the API key from environment variables" is the recommended way to configure a key. */
+const FROM_ENVIRONMENT_AFTER = /^\s+from\s+(?:the\s+|your\s+)?(?:environment(?:\s+variables?)?|env\s+vars?|process\.env)\b/i;
+const FROM_ENVIRONMENT_END = /\b(?:from|via|using|through)\s+(?:the\s+|your\s+)?(?:environment variables|process\.env)$/i;
+const SENDS_IT_ON = /\b(?:send|post|upload|exfiltrate|transmit|forward|curl|share|e-?mail)\b|https?:/i;
+
+function isBenignCredentialMention(text: string, match: string, index: number): boolean {
+  if (UNRELATED_VERB.test(match) || ONLY_A_CONDITION.test(match)) return true;
+  const end = index + match.length;
+  const after = text.slice(end, end + 120).split(/[.!?;\n]/, 1)[0]!;
+  if (CRED_STATE_AFTER.test(after)) return true;
+  return (FROM_ENVIRONMENT_END.test(match) || FROM_ENVIRONMENT_AFTER.test(after)) && !SENDS_IT_ON.test(after);
+}
+
 export function findCredentialAccess(text: string): TextMatch[] {
   const out: TextMatch[] = [];
   for (const m of matchAll(CRED_ACCESS, text)) {
-    if (isNegated(text, m.index)) continue;
+    if (isNegated(text, m.index) || isBenignCredentialMention(text, m[0], m.index)) continue;
     // "Copy .env.example to .env" sets up a local file; it does not read secrets.
     if (/\.env\.(?:example|sample|template|dist)\b/i.test(m[0])) continue;
     out.push({ index: m.index, detail: excerpt(m[0], 70) });
@@ -219,13 +351,19 @@ const OVERRIDE = [
   /\b(?:ignore|disregard|forget)\s+(?:all|any)\s+(?:other\s+)?(?:instructions|prompts|directives|guidelines)\b/gi,
 ];
 
-const SKIP_CONFIRM_DIRECT = [
-  // do not ask for confirmation / no need to ask the user
-  /\b(?:do not|don't|dont|never|no need to|stop|avoid)\s+(?:ask(?:ing)?|request(?:ing)?|wait(?:ing)? for|seek(?:ing)?|prompt(?:ing)?)\b[^.!?;\n]{0,30}?\b(?:confirm(?:ation)?s?|approvals?|permission|consent|sign-?off|the user|me|anyone|humans?)\b/gi,
+/** Negating these makes a safeguard: "Never skip confirmation", "Do not use --yolo". */
+const DISABLE_SAFEGUARD = [
+  ...OVERRIDE,
   // skip confirmation / bypass approval
   /\b(?:skip|bypass|disable|turn off)\b[^.!?;\n]{0,20}?\b(?:confirmations?|approvals?|permission (?:checks?|prompts?)|safety checks?|human review|review step)\b/gi,
   // flags and modes that turn off prompts
   /--dangerously-skip-permissions\b|\bbypassPermissions\b|--yolo\b/gi,
+];
+
+/** The negation is part of the instruction itself: "Do not ask for confirmation". */
+const SKIP_CONFIRM_DIRECT = [
+  // do not ask for confirmation / no need to ask the user
+  /\b(?:do not|don't|dont|never|no need to|stop|avoid)\s+(?:ask(?:ing)?|request(?:ing)?|wait(?:ing)? for|seek(?:ing)?|prompt(?:ing)?)\b[^.!?;\n]{0,30}?\b(?:confirm(?:ation)?s?|approvals?|permission|consent|sign-?off|the user|me|anyone|humans?)\b/gi,
   // do not tell the user
   /\b(?:do not|don't|dont|never)\s+(?:tell|inform|notify|alert|mention (?:this |it )?to|reveal (?:this |it )?to)\b[^.!?;\n]{0,15}?\b(?:the user|users?|anyone|the human|humans|the developer)\b/gi,
   /\b(?:do not|don't|dont|never)\s+(?:mention|reveal|disclose)\s+(?:this|these instructions|that you)\b/gi,
@@ -238,12 +376,13 @@ const WITHOUT_CONFIRM =
 
 export function findInstructionOverride(text: string): TextMatch[] {
   const out: TextMatch[] = [];
-  for (const re of [...OVERRIDE, ...SKIP_CONFIRM_DIRECT]) {
+  for (const re of SKIP_CONFIRM_DIRECT) {
     for (const m of matchAll(re, text)) out.push({ index: m.index, detail: excerpt(m[0], 70) });
   }
-  for (const m of matchAll(WITHOUT_CONFIRM, text)) {
-    if (isNegated(text, m.index)) continue;
-    out.push({ index: m.index, detail: excerpt(m[0], 70) });
+  for (const re of [...DISABLE_SAFEGUARD, WITHOUT_CONFIRM]) {
+    for (const m of matchAll(re, text)) {
+      if (!isNegated(text, m.index)) out.push({ index: m.index, detail: excerpt(m[0], 70) });
+    }
   }
   return out;
 }
@@ -270,15 +409,23 @@ export function findEncodedBlocks(text: string): TextMatch[] {
   for (const m of matchAll(HEX_ESCAPES, text)) {
     out.push({ index: m.index, detail: `${m[0].length / 4}-byte \\x escape sequence` });
   }
+  // Both lists are in text order, so these only ever move forward.
+  let hexAt = 0;
+  let scanned = 0;
+  let tokenHasUrl = false;
   for (const m of matchAll(BASE64_RUN, text)) {
     const run = m[0];
+    // Part of a URL: the token before the run contains "://".
+    for (let i = scanned; i < m.index; i++) {
+      if (/\s/.test(text[i]!)) tokenHasUrl = false;
+      else if (text.startsWith('://', i)) tokenHasUrl = true;
+    }
+    scanned = m.index;
     // Require mixed character classes, which plain words and paths rarely have.
     if (!/[A-Z]/.test(run) || !/[a-z]/.test(run) || !/\d/.test(run)) continue;
-    if (hexSpans.some(([s, e]) => m.index >= s && m.index < e)) continue;
-    // Part of a URL: the token before the run contains "://".
-    let tokenStart = m.index;
-    while (tokenStart > 0 && !/\s/.test(text[tokenStart - 1]!)) tokenStart--;
-    if (text.slice(tokenStart, m.index).includes('://')) continue;
+    while (hexAt < hexSpans.length && hexSpans[hexAt]![1] <= m.index) hexAt++;
+    if (hexAt < hexSpans.length && m.index >= hexSpans[hexAt]![0]) continue;
+    if (tokenHasUrl) continue;
     out.push({ index: m.index, detail: `${run.length}-character base64 block` });
   }
   return out;
@@ -288,12 +435,13 @@ export function findEncodedBlocks(text: string): TextMatch[] {
 // RULES-007: installing unpinned packages
 // ---------------------------------------------------------------------------
 
-type Ecosystem = 'npm' | 'npx' | 'pip' | 'uvx' | 'pipx' | 'gem' | 'cargo' | 'go';
+type Ecosystem = 'npm' | 'npx' | 'deno' | 'pip' | 'uvx' | 'pipx' | 'gem' | 'cargo' | 'go';
 
 const INSTALL_COMMANDS: Array<{ re: RegExp; eco: Ecosystem }> = [
   { re: /\b(?:npm|pnpm|bun)\s+(?:install|i|add)\b/gi, eco: 'npm' },
   { re: /\byarn\s+(?:global\s+)?add\b/gi, eco: 'npm' },
-  { re: /\b(?:npx|bunx)\b|\b(?:pnpm|yarn)\s+dlx\b|\bnpm\s+exec\b/gi, eco: 'npx' },
+  { re: /\b(?:npx|bunx|pnpx)\b|\b(?:pnpm|yarn)\s+dlx\b|\bnpm\s+exec\b/gi, eco: 'npx' },
+  { re: /\bdeno\s+run\b/gi, eco: 'deno' },
   { re: /\b(?:pip3?|python3?\s+-m\s+pip|uv\s+pip)\s+install\b|\buv\s+add\b|\bpoetry\s+add\b/gi, eco: 'pip' },
   { re: /\buvx\b|\buv\s+tool\s+(?:install|run)\b/gi, eco: 'uvx' },
   { re: /\bpipx\s+(?:install|run)\b/gi, eco: 'pipx' },
@@ -306,6 +454,7 @@ const INSTALL_COMMANDS: Array<{ re: RegExp; eco: Ecosystem }> = [
 const VALUE_FLAGS: Record<Ecosystem, string[]> = {
   npm: ['--registry', '--prefix', '-w', '--workspace', '--tag', '--cache'],
   npx: ['-c', '--call', '--registry', '--cache'],
+  deno: ['--config', '-c', '--import-map', '--lock'],
   pip: ['-r', '--requirement', '-c', '--constraint', '-e', '--editable', '-i', '--index-url', '--extra-index-url', '-f', '--find-links', '-t', '--target', '--prefix', '--python', '--group'],
   uvx: ['--python', '--index-url', '--extra-index-url'],
   pipx: ['--python', '--pip-args', '--index-url'],
@@ -316,8 +465,13 @@ const VALUE_FLAGS: Record<Ecosystem, string[]> = {
 
 const EXACT_SEMVER = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
-function isLocalOrUrl(spec: string): boolean {
-  return /^(?:\.|\/|~|[a-z]:\\)|:\/\/|^(?:file|git|github|gitlab|bitbucket|link|workspace):|\.(?:whl|tar\.gz|tgz|zip)$/i.test(spec);
+const REMOTE_SPEC = /:\/\/|^(?:git(?:\+\w+)?|github|gitlab|bitbucket):/i;
+const LOCAL_SPEC = /^(?:\.|\/|~|[a-z]:[\\/])|^(?:file|link|workspace):|\.(?:whl|tar\.gz|tgz|zip)$/i;
+/** A git commit cannot be moved. A branch, a tag or the content behind a URL can. */
+const COMMIT_PINNED = /[#@][0-9a-f]{40}$/i;
+
+function isLocal(spec: string): boolean {
+  return !REMOTE_SPEC.test(spec) && LOCAL_SPEC.test(spec);
 }
 
 function isPlaceholder(spec: string): boolean {
@@ -371,6 +525,7 @@ function unpinnedPackages(eco: Ecosystem, args: string[]): string[] {
     case 'npx':
     case 'uvx':
     case 'pipx':
+    case 'deno':
       // Only the first positional is a package; the rest are its arguments.
       candidates = packageFlagValues.length > 0 ? packageFlagValues : positionals.slice(0, 1);
       break;
@@ -380,9 +535,18 @@ function unpinnedPackages(eco: Ecosystem, args: string[]): string[] {
 
   const unpinned: string[] = [];
   for (const spec of candidates) {
-    if (isPlaceholder(spec) || isLocalOrUrl(spec)) continue;
+    if (isPlaceholder(spec) || isLocal(spec)) continue;
+    if (REMOTE_SPEC.test(spec)) {
+      if (!COMMIT_PINNED.test(spec) && !(eco === 'deno' && /@\d+\.\d+\.\d+/.test(spec))) unpinned.push(spec);
+      continue;
+    }
     let pinned: boolean;
     switch (eco) {
+      case 'deno':
+        // A plain script path is local; only registry specifiers download anything.
+        if (!/^(?:npm|jsr):/i.test(spec)) continue;
+        pinned = npmPinned(spec);
+        break;
       case 'npm':
       case 'npx':
         pinned = npmPinned(spec);
@@ -409,13 +573,16 @@ function unpinnedPackages(eco: Ecosystem, args: string[]): string[] {
   return unpinned;
 }
 
-const ARG_TERMINATOR = /[;&|`)\n#]|\s(?:and|then)\s/;
+// `#` starts a comment only after a space; in `github:x/y#abc` it names a commit.
+const ARG_TERMINATOR = /[;&|`)\n]|\s#|\s(?:and|then)\s/;
 
 export function findUnpinnedInstalls(text: string): TextMatch[] {
   const out: TextMatch[] = [];
   for (const { re, eco } of INSTALL_COMMANDS) {
-    for (const m of matchAll(re, text)) {
-      const rest = text.slice(m.index + m[0].length);
+    const commands = [...matchAll(re, text)];
+    for (const [i, m] of commands.entries()) {
+      // Arguments stop at the next command, so each piece of text is read once.
+      const rest = text.slice(m.index + m[0].length, commands[i + 1]?.index);
       const end = rest.search(ARG_TERMINATOR);
       const argText = end === -1 ? rest : rest.slice(0, end);
       const names = unpinnedPackages(eco, argText.split(/\s+/));

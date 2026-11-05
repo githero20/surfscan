@@ -108,9 +108,13 @@ export const claudeCodeAdapter: ApprovalAdapter = {
     }
 
     if (Array.isArray(permissions.allow)) {
+      // Rules appear in file order, so each search continues from the last one.
+      let cursor = Math.max(0, loc.keyOffset('allow'));
       for (const rule of permissions.allow) {
         if (typeof rule !== 'string') continue;
-        settings.allow.push(parseRule(rule, loc.stringValue(rule, 'allow')));
+        const offset = loc.stringValueOffset(rule, cursor);
+        if (offset >= cursor) cursor = offset;
+        settings.allow.push(parseRule(rule, loc.lineOfOffset(offset)));
       }
     }
 

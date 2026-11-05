@@ -25,7 +25,7 @@ function settingsFor(context: ScanContext): ApprovalSettings[] {
       const settings = adapter.parse(file);
       if (settings) out.push(settings);
     } catch (err) {
-      context.warn(`${file.path}: could not parse ${adapter.agent} settings (${(err as Error).message})`);
+      context.warn(`${file.path}: could not parse ${adapter.agent} settings (${(err as Error).message})`, { incomplete: true });
     }
   }
   parsed.set(context, out);

@@ -5,7 +5,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Command, CommanderError, Option } from 'commander';
-import { CONFIG_FILE_NAME, ConfigError, loadConfig } from '../core/config.js';
+import { CONFIG_FILE_NAME, ConfigError, DEFAULT_CONFIG, loadConfig, validateConfig } from '../core/config.js';
 import { createNodeProvider } from '../core/node-provider.js';
 import { formatJson, formatText } from '../core/report/index.js';
 import { escapeUnsafe } from '../core/report/sanitize.js';
@@ -43,7 +43,8 @@ export interface CliIO {
 interface CommonOptions {
   format: 'text' | 'json';
   failOn: Severity;
-  config?: string;
+  /** False with --no-config. */
+  config?: string | false;
   color: boolean;
   strict?: boolean;
   offline?: boolean;
@@ -118,9 +119,14 @@ async function connectSource(
   config: SurfscanConfig,
   opts: CommonOptions,
   io: CliIO,
-): Promise<{ source: ToolSource; notChecked: string[] }> {
+): Promise<{ source: ToolSource; notChecked: string[]; warnings: string[]; incomplete: boolean }> {
   const servers = await configuredServers(provider, config, io);
-  const warn = (message: string): void => io.stderr(`warning: ${safeText(message)}\n`);
+  const warnings: string[] = [];
+  const warn = (message: string): void => {
+    warnings.push(message);
+    io.stderr(`warning: ${safeText(message)}\n`);
+  };
+  let skippedUnpinned = false;
   io.stderr('WARNING: --connect runs third-party code on this machine.\n');
   io.stderr('Each server gets a minimal environment (PATH, HOME, temp folders, proxy and certificate settings)\n');
   io.stderr('plus the variables listed under env. Your other shell variables are not passed on.\n\n');
@@ -134,10 +140,14 @@ async function connectSource(
     const target = unpinnedTarget(s);
     io.stderr(`${safeText(s.name)}\n  runs: ${safeText([s.command, ...s.args].join(' '))}\n  env:  ${safeText(describeEnv(s))}\n`);
     if (target) io.stderr(`  NOT PINNED: it runs whatever is newest (${safeText(target)}), which may differ from what you reviewed\n`);
+    if (/\$\{(?:env:)?[A-Za-z_]\w*\}/.test([s.command, ...s.args].join(' '))) {
+      io.stderr('  note: ${VAR} is only expanded in env, so here it is passed as written\n');
+    }
 
     if (opts.yes) {
       if (target && !opts.allowUnpinned) {
         warn(`${s.name}: skipped because it is not pinned (pin a version, or pass --allow-unpinned)`);
+        skippedUnpinned = true;
       } else {
         approved.push(s);
       }
@@ -153,10 +163,18 @@ async function connectSource(
   if (approved.length === 0) throw new UsageError('--connect: no servers were launched');
 
   const tools = await connectToServers(approved, io.env, warn);
-  return { source: { tools }, notChecked: servers.map((s) => s.name).filter((name) => !(name in tools)) };
+  // Declining a server at the prompt is a choice. A failure, or a skip nobody was there to decide, is not.
+  const incomplete = skippedUnpinned || approved.some((s) => !(s.name in tools));
+  return { source: { tools }, notChecked: servers.map((s) => s.name).filter((name) => !(name in tools)), warnings, incomplete };
 }
 
-async function loadToolSource(root: string, provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<ToolSource | undefined> {
+interface LoadedTools {
+  source?: ToolSource;
+  warnings: string[];
+  incomplete: boolean;
+}
+
+async function loadToolSource(root: string, provider: SourceProvider, config: SurfscanConfig, opts: CommonOptions, io: CliIO): Promise<LoadedTools> {
   if (opts.tools && opts.connect) throw new UsageError('use either --tools or --connect, not both');
   if (opts.updateLock && !opts.tools && !opts.connect) {
     throw new UsageError('--update-lock needs a tool list: pass --tools <file.json> or --connect');
@@ -164,8 +182,10 @@ async function loadToolSource(root: string, provider: SourceProvider, config: Su
 
   let source: ToolSource | undefined;
   let notChecked: string[] = [];
+  let warnings: string[] = [];
+  let incomplete = false;
   if (opts.connect) {
-    ({ source, notChecked } = await connectSource(provider, config, opts, io));
+    ({ source, notChecked, warnings, incomplete } = await connectSource(provider, config, opts, io));
   } else if (opts.tools) {
     const content = await readIfExists(resolve(io.cwd, opts.tools));
     if (content === undefined) throw new UsageError(`tool list not found: ${opts.tools}`);
@@ -194,36 +214,56 @@ async function loadToolSource(root: string, provider: SourceProvider, config: Su
     await writeFile(path, `${JSON.stringify(lock, null, 2)}\n`);
     io.stderr(`wrote ${LOCK_FILE_PATH}\n`);
   }
-  return source;
+  return { source, warnings, incomplete };
+}
+
+/** The checks a config in the scanned project turns off. That file can change in the same pull request being scanned. */
+function describeProjectConfig(config: SurfscanConfig): string | undefined {
+  const off = [
+    config.ignore.length > 0 ? `rules ${config.ignore.join(', ')}` : '',
+    config.ignorePaths.length > 0 ? `paths ${config.ignorePaths.join(', ')}` : '',
+    config.deps.minAgeDays < DEFAULT_CONFIG.deps.minAgeDays ? `DEPS-004 lowered to ${config.deps.minAgeDays} days` : '',
+  ].filter(Boolean);
+  return off.length > 0 ? `${CONFIG_FILE_NAME} in the scanned project turns off checks: ${off.join('; ')} (--no-config ignores it)` : undefined;
 }
 
 async function runCommand(name: string, pathArg: string | undefined, opts: CommonOptions, io: CliIO): Promise<number> {
   const root = await resolveRoot(io.cwd, pathArg);
-  const config = opts.config
-    ? await loadConfig(readIfExists, resolve(io.cwd, opts.config), true)
-    : await loadConfig(readIfExists, join(root, CONFIG_FILE_NAME), false);
+  let config: SurfscanConfig;
+  let configNote: string | undefined;
+  if (opts.config === false) {
+    config = validateConfig({});
+  } else if (opts.config) {
+    config = await loadConfig(readIfExists, resolve(io.cwd, opts.config), true);
+  } else {
+    config = await loadConfig(readIfExists, join(root, CONFIG_FILE_NAME), false);
+    configNote = describeProjectConfig(config);
+  }
 
   const provider = createNodeProvider(root);
-  const toolSource = name === 'mcp' ? await loadToolSource(root, provider, config, opts, io) : undefined;
+  const tools: LoadedTools = name === 'mcp' ? await loadToolSource(root, provider, config, opts, io) : { warnings: [], incomplete: false };
 
   const result = await runScanners(COMMANDS[name]!.scanners, {
     provider,
     config,
-    options: { offline: opts.offline === true, toolSource, ...(io.fetch ? { fetch: io.fetch } : {}) },
+    options: { offline: opts.offline === true, toolSource: tools.source, ...(io.fetch ? { fetch: io.fetch } : {}) },
   });
 
-  for (const w of result.warnings) io.stderr(`warning: ${safeText(w)}\n`);
+  const printed = configNote ? [configNote, ...result.warnings] : result.warnings;
+  for (const w of printed) io.stderr(`warning: ${safeText(w)}\n`);
+  const incomplete = result.incomplete || tools.incomplete;
 
   if (opts.format === 'json') {
-    io.stdout(formatJson(result.findings, { warnings: result.warnings, incomplete: result.incomplete }));
+    // --connect warnings were printed as they happened, but the report must still explain them.
+    io.stdout(formatJson(result.findings, { warnings: [...tools.warnings, ...printed], incomplete }));
   } else {
     const color = opts.color && io.isTTY && !io.env.NO_COLOR;
-    io.stdout(formatText(result.findings, { color, incomplete: result.incomplete }));
+    io.stdout(formatText(result.findings, { color, incomplete }));
   }
 
   // Findings win: exit 1 already fails the build, and says more than 2 would.
   if (hasFailures(result.findings, opts.failOn)) return EXIT_FINDINGS;
-  if (opts.strict && result.incomplete) {
+  if (opts.strict && incomplete) {
     io.stderr('surfscan: --strict: some checks could not run, so the result is incomplete\n');
     return EXIT_ERROR;
   }
@@ -248,6 +288,7 @@ function buildProgram(io: CliIO, setExit: (code: number) => void): Command {
       .addOption(new Option('--format <format>', 'output format').choices(['text', 'json']).default('text'))
       .addOption(new Option('--fail-on <severity>', 'exit 1 at or above this severity').choices([...SEVERITIES]).default('high'))
       .option('--config <file>', `config file (default: ${CONFIG_FILE_NAME} in the scanned directory, if present)`)
+      .option('--no-config', `ignore any ${CONFIG_FILE_NAME} in the scanned directory; use when scanning untrusted changes`)
       .option('--no-color', 'disable colored output')
       .option('--strict', 'exit 2 if any check could not run (for example the registry was unreachable)')
       .action(async (pathArg: string, opts: CommonOptions) => {

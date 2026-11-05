@@ -86,7 +86,7 @@ describe('cli: which options each command accepts', () => {
 
   it.each(ALL_COMMANDS)('%s accepts the common options', async (command) => {
     const text = await help(command);
-    for (const option of ['--format', '--fail-on', '--config', '--no-color', '--strict']) expect(text, option).toContain(option);
+    for (const option of ['--format', '--fail-on', '--config', '--no-config', '--no-color', '--strict']) expect(text, option).toContain(option);
     expect(text).toContain('[path]');
   });
 
@@ -251,7 +251,8 @@ describe('cli: --format json for every command', () => {
   it('keeps warnings out of the text report on stdout', async () => {
     const root = await tempProject({ '.claude/settings.json': '{ not json' });
     const r = await runCli(['approvals', root]);
-    expect(r.stdout).toBe('No findings\n');
+    expect(r.stdout).toContain('No findings\n');
+    expect(r.stdout).not.toContain('warning:');
     expect(r.stderr).toContain('warning:');
   });
 });

@@ -30,6 +30,9 @@ export const KEYS_TARGETS = [
 /** Large generated files that never hold hand-written secrets. */
 const KEYS_EXCLUDE = ['**/package-lock.json', '**/npm-shrinkwrap.json', '**/pnpm-lock.yaml', '**/composer.lock'];
 
+/** Data files such as API schemas often pass the default limit, and a secret in one is still a secret. */
+export const MAX_KEYS_FILE_BYTES = 32 * 1024 * 1024;
+
 export function findKeysTargets(provider: SourceProvider, config: SurfscanConfig): Promise<string[]> {
   return listTargets(provider, config, KEYS_TARGETS, KEYS_EXCLUDE);
 }
@@ -64,6 +67,7 @@ const SECRET_NAME_PARTS = new Set([
   'CREDENTIAL',
   'CREDENTIALS',
   'AUTH',
+  'AUTHORIZATION',
   'PRIVATE',
   'DSN',
 ]);
@@ -105,7 +109,7 @@ export interface Assignment {
 
 // NAME=value, NAME: value, "NAME": "value", name = "value" (env, YAML, JSON, TOML, INI, HCL)
 const ASSIGNMENT =
-  /(?:^|[\s{,])(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|([^\s,#;}\]]+))/gm;
+  /(?:^|[\s{,])(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|(\$\{[^}\n]*\}|[^\s,#;}\]{[][^\s,#;}\]]*))/gm;
 
 export function findAssignments(text: string): Assignment[] {
   const out: Assignment[] = [];
@@ -133,7 +137,33 @@ function hasSecret(file: SourceFile): Assignment | TextMatch | undefined {
 // KEYS-001: live or production keys
 // ---------------------------------------------------------------------------
 
-export function findLiveKeys(text: string): TextMatch[] {
+const AWS_SECRET_NAME = /^aws[_-]?secret(?:[_-]?access)?[_-]?key$/i;
+const AGENT_CONFIG = /(?:^|\/)(?:\.mcp\.json|\.cursor\/mcp\.json|\.vscode\/mcp\.json|\.claude\/settings(?:\.local)?\.json|\.codex\/config\.toml)$/;
+/** `Bearer ${TOKEN}` reads the value from the environment, which is what a config should do. */
+const REFERENCES_VARIABLE = /\$\{|\$[A-Za-z_]|%\w+%/;
+
+/** `production:` or `prod:` with nothing after it opens a YAML block. Returns the secrets inside each one. */
+function findYamlProductionSecrets(text: string): Assignment[] {
+  const out: Assignment[] = [];
+  let blockIndent = -1;
+  let offset = 0;
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.trim() !== '' && !line.trimStart().startsWith('#')) {
+      const indent = line.length - line.trimStart().length;
+      if (blockIndent !== -1 && indent <= blockIndent) blockIndent = -1;
+      if (/^\s*["']?(?:prod|production)["']?:\s*$/i.test(line)) {
+        if (blockIndent === -1) blockIndent = indent;
+      } else if (blockIndent !== -1) {
+        for (const a of findAssignments(line)) out.push({ ...a, index: offset + a.index });
+      }
+    }
+    offset += rawLine.length + 1;
+  }
+  return out;
+}
+
+export function findLiveKeys(text: string, path = ''): TextMatch[] {
   const out: TextMatch[] = [];
   for (const { name, regex } of SECRET_PATTERNS) {
     for (const m of matchAll(regex, text)) {
@@ -143,10 +173,19 @@ export function findLiveKeys(text: string): TextMatch[] {
       out.push({ index: m.index, detail: `${name} ${shown}` });
     }
   }
-  for (const a of findAssignments(text)) {
-    if (!isProdName(a.name)) continue;
-    const credentialUrl = URL_WITH_PASSWORD.exec(a.value);
-    if ((isSecretName(a.name) && isRealValue(a.value)) || credentialUrl) {
+  const assignments = findAssignments(text);
+  const agentConfig = AGENT_CONFIG.test(path);
+  for (const a of assignments) {
+    if (AWS_SECRET_NAME.test(a.name) && isRealValue(a.value)) {
+      out.push({ index: a.index, detail: `AWS secret access key ${maskSecret(a.value)}` });
+    } else if (isProdName(a.name) && ((isSecretName(a.name) && isRealValue(a.value)) || URL_WITH_PASSWORD.test(a.value))) {
+      out.push({ index: a.index, detail: `production credential ${a.name}=${maskSecret(a.value)}` });
+    } else if (agentConfig && isSecretName(a.name) && isRealValue(a.value) && !REFERENCES_VARIABLE.test(a.value)) {
+      out.push({ index: a.index, detail: `credential written into an agent config, ${a.name}=${maskSecret(a.value)}` });
+    }
+  }
+  for (const a of findYamlProductionSecrets(text)) {
+    if ((isSecretName(a.name) && isRealValue(a.value)) || URL_WITH_PASSWORD.test(a.value)) {
       out.push({ index: a.index, detail: `production credential ${a.name}=${maskSecret(a.value)}` });
     }
   }
@@ -178,8 +217,8 @@ function findWildcardStatements(node: unknown, found: object[] = []): object[] {
   return found;
 }
 
-const ACTION_STAR = /["']?\b(?:Action|actions)\b["']?\s*[:=]\s*\[?\s*(?:-\s*)?["']\*["']/gi;
-const RESOURCE_STAR = /["']?\b(?:Resource|resources)\b["']?\s*[:=]\s*\[?\s*(?:-\s*)?["']\*["']/i;
+const ACTION_STAR = /["']?\b(?:Action|actions)\b["']?\s*[:=]\s*(?:\[\s*)?(?:-\s*)?["']\*["']/gi;
+const RESOURCE_STAR = /["']?\b(?:Resource|resources)\b["']?\s*[:=]\s*(?:\[\s*)?(?:-\s*)?["']\*["']/i;
 const ADMIN_POLICY = /\barn:aws:iam::aws:policy\/AdministratorAccess\b|["'\s/]AdministratorAccess["'\s]|\broles\/(?:owner|editor)\b/g;
 
 export function findAdminPolicies(path: string, text: string): TextMatch[] {
@@ -225,7 +264,7 @@ export const rules: Rule[] = [
     check(context: ScanContext): Finding[] {
       const out: Finding[] = [];
       for (const file of context.files) {
-        const matches = findLiveKeys(file.content);
+        const matches = findLiveKeys(file.content, file.path);
         out.push(
           ...findingsFromMatches(
             this,
@@ -291,4 +330,5 @@ export const keysScanner: Scanner = {
   name: 'keys',
   rules,
   findTargets: findKeysTargets,
+  maxFileBytes: MAX_KEYS_FILE_BYTES,
 };

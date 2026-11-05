@@ -49,10 +49,16 @@ export async function runScanner(scanner: Scanner, opts: RunOptions): Promise<Sc
   let incomplete = false;
   const paths = await scanner.findTargets(opts.provider, opts.config);
 
+  for (const link of opts.provider.takeSkippedLinks?.() ?? []) {
+    warnings.push(`${link}: not scanned, because surfscan does not follow links to folders or to files outside the project`);
+    incomplete = true;
+  }
+
+  const readOptions = scanner.maxFileBytes === undefined ? undefined : { maxBytes: scanner.maxFileBytes };
   const files: SourceFile[] = [];
   for (const path of paths) {
     try {
-      const content = await opts.provider.read(path);
+      const content = await opts.provider.read(path, readOptions);
       if (content !== undefined) files.push({ path, content });
     } catch (err) {
       warnings.push(`${path}: skipped (${(err as Error).message})`);
