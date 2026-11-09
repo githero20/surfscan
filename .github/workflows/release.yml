@@ -1,14 +1,15 @@
 name: Release
 
-# Publishes to npm when a version tag such as v0.1.0 is pushed.
-# Needs an NPM_TOKEN secret (an npm automation token) in the repository settings.
+# Stages a release on npm when a version tag such as v0.1.0 is pushed.
+# Uses npm trusted publishing (OIDC), so no npm token is stored. The package's
+# Trusted Publisher settings on npmjs.com must point at this repo and release.yml.
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: read
-  id-token: write # lets npm record where the package was built (provenance)
+  id-token: write # lets npm verify this workflow (trusted publishing) and record provenance
 
 jobs:
   publish:
@@ -20,9 +21,12 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1+ and staging needs 11.15.0+; Node 22 ships an older npm.
+      # Pinned so releases are reproducible; raise it on purpose, not automatically.
+      - run: npm install -g npm@11.21.2
       - run: npm ci
       - name: Check the tag matches package.json
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Stages the release instead of publishing it. A maintainer approves it with
+      # 2FA (npm stage approve <id>, or on npmjs.com) before it goes live.
+      - run: npm stage publish --access public
