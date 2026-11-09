@@ -154,13 +154,14 @@ In CI, pass `--strict`. If any check could not run (registry unreachable, a file
 {
   "ignore": ["RULES-006"],
   "ignorePaths": ["vendor/**"],
-  "deps": { "minAgeDays": 30 }
+  "deps": { "minAgeDays": 30, "trustedPackages": ["my-new-lib"] }
 }
 ```
 
 - `ignore`: rule IDs to skip
 - `ignorePaths`: globs to exclude from scanning
 - `deps.minAgeDays`: DEPS-004 threshold in days (default 30)
+- `deps.trustedPackages`: package names the DEPS-004 age check skips (surfscan itself is always skipped). Other DEPS rules still apply. A project's `surfscan.json` is controlled by whoever owns the project, so do not rely on it when scanning code you do not trust.
 
 Unknown keys are rejected with an error.
 

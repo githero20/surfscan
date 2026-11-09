@@ -208,6 +208,9 @@ function finding(rule: Pick<Rule, 'id' | 'severity'>, ref: DepRef, message: stri
   return { ruleId: rule.id, severity: rule.severity, message, file: ref.file, line: ref.line, fix };
 }
 
+/** Packages whose age is never reported by DEPS-004, whatever the project config says. */
+const BUILT_IN_TRUSTED = ['surfscan'];
+
 /** One finding per reference to a package found on the registry. */
 async function registryFindings(
   context: ScanContext,
@@ -306,19 +309,30 @@ export const rules: Rule[] = [
     severity: 'medium',
     title: 'Newly published package',
     check(context) {
-      const { minAgeDays } = context.config.deps;
+      const { minAgeDays, trustedPackages } = context.config.deps;
+      const trusted = new Set([...BUILT_IN_TRUSTED, ...trustedPackages]);
+      const skipped = new Set<string>();
       const now = Date.now();
       return registryFindings(context, (ref, packument) => {
         const created = Date.parse(packument.created ?? '');
         if (Number.isNaN(created)) return undefined;
         const ageDays = Math.floor((now - created) / DAY_MS);
         if (ageDays >= minAgeDays) return undefined;
+        if (trusted.has(ref.name)) {
+          skipped.add(ref.name);
+          return undefined;
+        }
         return finding(
           this,
           ref,
           `"${ref.name}" was first published ${ageDays} day(s) ago (minimum ${minAgeDays})`,
           'review the package and its maintainer before using it, or wait until it has a track record',
         );
+      }).then((findings) => {
+        if (skipped.size > 0) {
+          context.warn(`deps: skipped the age check (DEPS-004) for ${skipped.size} trusted package(s): ${[...skipped].join(', ')}`);
+        }
+        return findings;
       });
     },
   },

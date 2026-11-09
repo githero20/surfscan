@@ -135,6 +135,22 @@ describe('deps scanner', () => {
       expect(findings[0]!.message).toBe('"brand-new" was first published 3 day(s) ago (minimum 30)');
     });
 
+    it('DEPS-004 does not flag surfscan itself, and says it skipped it', async () => {
+      const files = { 'package.json': '{"devDependencies":{"surfscan":"^0.1.0"}}' };
+      const { options } = mockRegistry({ surfscan: doc('0.1.0', {}, daysAgo(2)) });
+      const result = await scanMemory(files, options);
+      expect(result.findings).toEqual([]);
+      expect(result.warnings.join(' ')).toContain('skipped the age check (DEPS-004) for 1 trusted package(s): surfscan');
+    });
+
+    it('DEPS-004 skips packages listed in deps.trustedPackages but still runs the other rules', async () => {
+      const files = { 'package.json': '{"dependencies":{"brand-new":"1.0.0"}}' };
+      const { options } = mockRegistry({ 'brand-new': doc('1.0.0', { scripts: { postinstall: 'node x.js' } }, daysAgo(3)) });
+      const config = { ...DEFAULT_CONFIG, deps: { ...DEFAULT_CONFIG.deps, trustedPackages: ['brand-new'] } };
+      const result = await runScanner(depsScanner, { provider: memory(files), config, options });
+      expect(result.findings.map((f) => f.ruleId)).toEqual(['DEPS-005']);
+    });
+
     it('DEPS-004 accepts an older package', async () => {
       expect(await scan('DEPS-004', 'clean', { 'old-package': doc() })).toEqual([]);
     });

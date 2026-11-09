@@ -296,7 +296,7 @@ Requests go to `registry.npmjs.org` and, for DEPS-002 only, `api.npmjs.org`. The
 
 **Fix.** Review the package and its maintainer, or wait until it has a track record.
 
-**Detection.** The package's first publish date (`time.created`) is younger than `deps.minAgeDays`. New versions of old packages are not flagged.
+**Detection.** The package's first publish date (`time.created`) is younger than `deps.minAgeDays`. New versions of old packages are not flagged. Packages named in `deps.trustedPackages`, and surfscan itself, are skipped; surfscan then warns which ones it skipped. The other DEPS rules still run on them.
 
 ### DEPS-005 (medium): install scripts present
 

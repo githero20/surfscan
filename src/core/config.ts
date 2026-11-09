@@ -6,7 +6,7 @@ export const CONFIG_FILE_NAME = 'surfscan.json';
 export const DEFAULT_CONFIG: SurfscanConfig = {
   ignore: [],
   ignorePaths: [],
-  deps: { minAgeDays: 30 },
+  deps: { minAgeDays: 30, trustedPackages: [] },
 };
 
 export class ConfigError extends Error {
@@ -17,7 +17,7 @@ export class ConfigError extends Error {
 }
 
 const TOP_LEVEL_KEYS = ['ignore', 'ignorePaths', 'deps'];
-const DEPS_KEYS = ['minAgeDays'];
+const DEPS_KEYS = ['minAgeDays', 'trustedPackages'];
 const RULE_ID = /^[A-Z]+-\d{3}$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -51,7 +51,7 @@ export function validateConfig(raw: unknown, source = CONFIG_FILE_NAME): Surfsca
   const config: SurfscanConfig = {
     ignore: [...DEFAULT_CONFIG.ignore],
     ignorePaths: [...DEFAULT_CONFIG.ignorePaths],
-    deps: { ...DEFAULT_CONFIG.deps },
+    deps: { ...DEFAULT_CONFIG.deps, trustedPackages: [...DEFAULT_CONFIG.deps.trustedPackages] },
   };
 
   if (raw.ignore !== undefined) {
@@ -78,6 +78,13 @@ export function validateConfig(raw: unknown, source = CONFIG_FILE_NAME): Surfsca
         throw new ConfigError(`${source}: "deps.minAgeDays" must be a non-negative integer`);
       }
       config.deps.minAgeDays = minAgeDays;
+    }
+    if (raw.deps.trustedPackages !== undefined) {
+      const names = stringArray(raw.deps.trustedPackages, 'deps.trustedPackages', source);
+      if (names.some((n) => n.trim() === '')) {
+        throw new ConfigError(`${source}: "deps.trustedPackages" must not contain empty names`);
+      }
+      config.deps.trustedPackages = names;
     }
   }
 
