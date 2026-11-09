@@ -5,7 +5,7 @@ name: Release
 # Trusted Publisher settings on npmjs.com must point at this repo and release.yml.
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -21,8 +21,6 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1+ and staging needs 11.15.0+; Node 22 ships an older npm.
-      # Pinned so releases are reproducible; raise it on purpose, not automatically.
       - run: npm install -g npm@11.21.2
       - run: npm ci
       - name: Check the tag matches package.json
