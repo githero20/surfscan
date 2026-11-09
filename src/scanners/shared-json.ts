@@ -3,17 +3,20 @@ import { LineIndex, stripBom } from '../core/text.js';
 /** Parse JSON that may contain comments and trailing commas, as VS Code's mcp.json may. */
 export function parseJsonc(raw: string): unknown {
   const text = stripBom(raw);
-  let out = '';
+  const out: string[] = [];
   let inString = false;
+  // Where in `out` a comma waits to see whether a closing bracket makes it a trailing one.
+  let pendingComma = -1;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (inString) {
-      out += ch;
-      if (ch === '\\') out += text[++i] ?? '';
+      out.push(ch);
+      if (ch === '\\') out.push(text[++i] ?? '');
       else if (ch === '"') inString = false;
     } else if (ch === '"') {
       inString = true;
-      out += ch;
+      pendingComma = -1;
+      out.push(ch);
     } else if (ch === '/' && text[i + 1] === '/') {
       const end = text.indexOf('\n', i);
       i = end === -1 ? text.length : end - 1;
@@ -21,15 +24,16 @@ export function parseJsonc(raw: string): unknown {
       const end = text.indexOf('*/', i + 2);
       i = end === -1 ? text.length : end + 1;
     } else if (ch === '}' || ch === ']') {
-      let tail = out.length;
-      while (tail > 0 && /\s/.test(out[tail - 1]!)) tail--;
-      if (out[tail - 1] === ',') out = out.slice(0, tail - 1);
-      out += ch;
+      if (pendingComma !== -1) out[pendingComma] = '';
+      pendingComma = -1;
+      out.push(ch);
     } else {
-      out += ch;
+      if (ch === ',') pendingComma = out.length;
+      else if (!/\s/.test(ch)) pendingComma = -1;
+      out.push(ch);
     }
   }
-  return JSON.parse(out);
+  return JSON.parse(out.join(''));
 }
 
 /**
@@ -59,10 +63,18 @@ export class JsonLocator {
 
   /** Line of a string value, searching after the given key when present. */
   stringValue(value: string, afterKey?: string): number {
-    const from = afterKey ? Math.max(0, this.text.indexOf(JSON.stringify(afterKey))) : 0;
+    return this.lineAt(this.stringValueOffset(value, afterKey ? this.keyOffset(afterKey) : 0));
+  }
+
+  /** Offset of a string value at or after `from`, or anywhere if not found there; -1 if absent. */
+  stringValueOffset(value: string, from = 0): number {
     const literal = JSON.stringify(value);
-    let at = this.text.indexOf(literal, from);
-    if (at === -1) at = this.text.indexOf(literal);
-    return this.lineAt(at);
+    const at = this.text.indexOf(literal, Math.max(0, from));
+    return at === -1 ? this.text.indexOf(literal) : at;
+  }
+
+  /** Line of a known offset. */
+  lineOfOffset(offset: number): number {
+    return this.lineAt(offset);
   }
 }

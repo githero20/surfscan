@@ -17,6 +17,9 @@ import { typosquatTarget } from './typosquat.js';
 
 export const DEPS_TARGETS = ['**/package.json', ...LOCK_FILE_NAMES.map((name) => `**/${name}`)];
 
+/** Lock files in healthy projects run to many megabytes. */
+export const MAX_DEPS_FILE_BYTES = 32 * 1024 * 1024;
+
 export function findDepsTargets(provider: SourceProvider, config: SurfscanConfig): Promise<string[]> {
   return listTargets(provider, config, DEPS_TARGETS);
 }
@@ -80,7 +83,7 @@ function lockLookup(files: Map<string, SourceFile>, dir: string, context: ScanCo
           const version = lockedVersion(lockName, lock.content, name, prefix);
           if (version) return version;
         } catch (err) {
-          context.warn(`${lock.path}: could not parse lock file (${(err as Error).message})`);
+          context.warn(`${lock.path}: could not parse lock file (${(err as Error).message})`, { incomplete: true });
           files.delete(lock.path);
         }
       }
@@ -124,7 +127,7 @@ async function collectRefs(context: ScanContext): Promise<DepRef[]> {
       const data: unknown = JSON.parse(stripBom(file.content));
       if (isObject(data)) manifests.push({ file, data });
     } catch (err) {
-      context.warn(`${file.path}: could not parse package.json (${(err as Error).message})`);
+      context.warn(`${file.path}: could not parse package.json (${(err as Error).message})`, { incomplete: true });
     }
   }
 
@@ -144,7 +147,11 @@ async function collectRefs(context: ScanContext): Promise<DepRef[]> {
       const deps = data[section];
       if (!isObject(deps)) continue;
       const from = Math.max(0, loc.keyOffset(section));
+      // Keys appear in file order, so each search continues from the last one.
+      let cursor = from;
       for (const [declared, rawSpec] of Object.entries(deps)) {
+        const offset = loc.keyOffset(declared, cursor);
+        if (offset !== -1) cursor = offset;
         if (typeof rawSpec !== 'string') continue;
         const resolved = resolveSpec(declared, rawSpec.trim());
         if (!resolved || workspaceNames.has(resolved.name)) continue;
@@ -159,7 +166,7 @@ async function collectRefs(context: ScanContext): Promise<DepRef[]> {
         refs.push({
           name: resolved.name,
           file: file.path,
-          line: loc.key(declared, from),
+          line: loc.key(declared, offset === -1 ? from : offset),
           spec: resolved.spec,
           version: EXACT_VERSION.exec(resolved.spec)?.[1] ?? locked(declared),
         });
@@ -265,6 +272,7 @@ export const rules: Rule[] = [
     async check(context) {
       const { refs, options, lookups } = await dataFor(context);
       const suspects = [...new Set(refs.map((r) => r.name))].filter((name) => typosquatTarget(name));
+      const isSuspect = new Set(suspects);
       const established = new Set<string>();
       if (lookups) {
         const fetcher = options.fetch ?? (globalThis.fetch as FetchLike);
@@ -275,7 +283,7 @@ export const rules: Rule[] = [
         });
       }
       return refs
-        .filter((ref) => suspects.includes(ref.name) && !established.has(ref.name))
+        .filter((ref) => isSuspect.has(ref.name) && !established.has(ref.name))
         .map((ref) => {
           const target = typosquatTarget(ref.name)!;
           return finding(this, ref, `"${ref.name}" is very close to the popular package "${target}"`, `confirm you meant this package and not "${target}"`);
@@ -397,4 +405,5 @@ export const depsScanner: Scanner = {
   name: 'deps',
   rules,
   findTargets: findDepsTargets,
+  maxFileBytes: MAX_DEPS_FILE_BYTES,
 };

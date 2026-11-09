@@ -48,7 +48,9 @@ export interface SourceProvider {
   /** List files matching the globs, relative to the root, with forward slashes. */
   list(patterns: string[], ignore: string[]): Promise<string[]>;
   /** Read a file relative to the root. Resolves to undefined if it does not exist. */
-  read(path: string): Promise<string | undefined>;
+  read(path: string, opts?: { maxBytes?: number }): Promise<string | undefined>;
+  /** Links matched since the last call that were not scanned. Each is returned once. */
+  takeSkippedLinks?(): string[];
 }
 
 export interface SourceFile {
@@ -83,6 +85,8 @@ export interface Scanner {
   /** Ordered high to low severity. */
   rules: Rule[];
   findTargets(provider: SourceProvider, config: SurfscanConfig): Promise<string[]>;
+  /** Read limit for this scanner's files, when they are routinely larger than the default. */
+  maxFileBytes?: number;
 }
 
 export interface ScanResult {

@@ -6,6 +6,7 @@ import {
   findHiddenContent,
   findInstructionOverride,
   findInvisibleChars,
+  findPipeToShell,
   findUnpinnedInstalls,
 } from '../rules/patterns.js';
 import { JsonLocator } from '../shared-json.js';
@@ -31,7 +32,7 @@ function serversFor(context: ScanContext): McpServer[] {
     try {
       out.push(...parseMcpConfig(file));
     } catch (err) {
-      context.warn(`${file.path}: could not parse MCP config (${(err as Error).message})`);
+      context.warn(`${file.path}: could not parse MCP config (${(err as Error).message})`, { incomplete: true });
     }
   }
   parsed.set(context, out);
@@ -153,7 +154,8 @@ export function unpinnedTarget(server: McpServer): string | undefined {
     const image = dockerImage(server.args);
     return image && !imagePinned(image) ? `container image ${image}` : undefined;
   }
-  return findUnpinnedInstalls([server.command ?? '', ...server.args].join(' '))[0]?.detail;
+  const launch = [server.command ?? '', ...server.args].join(' ');
+  return findUnpinnedInstalls(launch)[0]?.detail ?? findPipeToShell(launch)[0]?.detail;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +197,7 @@ async function readLock(context: ScanContext): Promise<LockFile | undefined> {
   try {
     return parseLock(text);
   } catch (err) {
-    context.warn(`${LOCK_FILE_PATH}: could not parse lock file (${(err as Error).message})`);
+    context.warn(`${LOCK_FILE_PATH}: could not parse lock file (${(err as Error).message})`, { incomplete: true });
     return undefined;
   }
 }
