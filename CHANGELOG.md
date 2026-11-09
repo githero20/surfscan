@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+- New `deps.trustedPackages` config key: DEPS-004 skips the listed packages and says which it skipped. surfscan itself is always skipped, so depending on it no longer raises DEPS-004.
+
+## 0.1.1 (unreleased)
+
+- New `deps.trustedPackages` config key: DEPS-004 skips the listed packages and says which it skipped. surfscan itself is always skipped, so depending on it no longer raises DEPS-004.
+
 ## 0.1.0 (2026-11-05)
 
 First release.

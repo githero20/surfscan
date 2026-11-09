@@ -338,7 +338,22 @@ describe('cli: config file', () => {
     expect(JSON.parse((await runCli(['deps', lax, '--format', 'json'], FIXTURES, { fetch })).stdout).findings).toEqual([]);
   });
 
+  it('deps.trustedPackages skips the DEPS-004 age check for the listed package only', async () => {
+    const created = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const fetch: FetchLike = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ 'dist-tags': { latest: '1.0.0' }, time: { created, '1.0.0': created }, versions: { '1.0.0': {} } }),
+    });
+    const manifest = '{"dependencies":{"fresh":"1.0.0","other":"1.0.0"}}';
+    const root = await tempProject({ 'package.json': manifest, 'surfscan.json': '{"deps":{"trustedPackages":["fresh"]}}' });
+    const report = JSON.parse((await runCli(['deps', root, '--format', 'json'], FIXTURES, { fetch })).stdout);
+    expect(report.findings.map((f: { message: string }) => f.message.split('"')[1])).toEqual(['other']);
+  });
+
   it.each([
+    ['{"deps":{"trustedPackages":"surfscan"}}', 'must be an array of strings'],
+    ['{"deps":{"trustedPackages":[" "]}}', 'must not contain empty names'],
     ['{"ignore":["nope"]}', 'is not a rule ID'],
     ['{"ignorePaths":"vendor"}', 'must be an array of strings'],
     ['{"deps":{"minAgeDays":1.5}}', 'non-negative integer'],

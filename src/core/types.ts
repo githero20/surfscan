@@ -36,6 +36,7 @@ export interface SurfscanConfig {
   ignorePaths: string[];
   deps: {
     minAgeDays: number;
+    trustedPackages: string[];
   };
 }
 

@@ -20,12 +20,12 @@ const f = (over: Partial<Finding>): Finding => ({
 
 describe('config', () => {
   it('applies defaults', () => {
-    expect(parseConfig('{}')).toEqual({ ignore: [], ignorePaths: [], deps: { minAgeDays: 30 } });
+    expect(parseConfig('{}')).toEqual({ ignore: [], ignorePaths: [], deps: { minAgeDays: 30, trustedPackages: [] } });
   });
 
   it('reads all known keys', () => {
-    const c = parseConfig('{"ignore":["RULES-006"],"ignorePaths":["docs/**"],"deps":{"minAgeDays":7}}');
-    expect(c).toEqual({ ignore: ['RULES-006'], ignorePaths: ['docs/**'], deps: { minAgeDays: 7 } });
+    const c = parseConfig('{"ignore":["RULES-006"],"ignorePaths":["docs/**"],"deps":{"minAgeDays":7,"trustedPackages":["foo"]}}');
+    expect(c).toEqual({ ignore: ['RULES-006'], ignorePaths: ['docs/**'], deps: { minAgeDays: 7, trustedPackages: ['foo'] } });
   });
 
   it('accepts a file saved with a UTF-8 byte order mark', () => {
