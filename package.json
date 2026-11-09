@@ -1,6 +1,6 @@
 {
   "name": "surfscan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Attack surface scanner for AI-assisted development",
   "keywords": [
     "ai",
