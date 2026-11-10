@@ -351,7 +351,19 @@ describe('cli: config file', () => {
     expect(report.findings.map((f: { message: string }) => f.message.split('"')[1])).toEqual(['other']);
   });
 
+  it('appr.protectedBranches makes APPR-002 protect extra branches', async () => {
+    const settings = '{"permissions":{"allow":["Bash(git push --force origin staging)","Bash(git push --force origin fix/x)"]}}';
+    const plain = await tempProject({ '.claude/settings.json': settings });
+    expect((await runCli(['scan', plain, '--offline', '--format', 'json'])).stdout).toContain('"findings": []');
+    const root = await tempProject({ '.claude/settings.json': settings, 'surfscan.json': '{"appr":{"protectedBranches":["staging"]}}' });
+    const report = JSON.parse((await runCli(['scan', root, '--offline', '--format', 'json'])).stdout);
+    expect(report.findings.map((f: { ruleId: string; message: string }) => [f.ruleId, f.message.includes('staging')])).toEqual([['APPR-002', true]]);
+  });
+
   it.each([
+    ['{"appr":{"protectedBranches":"main"}}', 'must be an array of strings'],
+    ['{"appr":{"protectedBranches":[""]}}', 'must not contain empty names'],
+    ['{"appr":{"branches":[]}}', 'unknown key "appr.branches"'],
     ['{"deps":{"trustedPackages":"surfscan"}}', 'must be an array of strings'],
     ['{"deps":{"trustedPackages":[" "]}}', 'must not contain empty names'],
     ['{"ignore":["nope"]}', 'is not a rule ID'],

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { claudeCodeAdapter, parseRule } from '../src/scanners/approvals/adapters/claude-code.js';
-import { destructiveMatch, DESTRUCTIVE_SAMPLES, isWildcardShell, patternToRegex } from '../src/scanners/approvals/destructive.js';
+import { DEFAULT_PROTECTED_BRANCHES, destructiveMatch, DESTRUCTIVE_SAMPLES, isWildcardShell, patternToRegex } from '../src/scanners/approvals/destructive.js';
 import {
   findAdminPolicies,
   findAssignments,
@@ -399,6 +399,14 @@ describe('approvals: destructive commands (APPR-002)', () => {
   it.each([
     'rm -rf /', 'rm -rf *', 'rm -fr build', 'rm -r -f dist', 'rm --recursive --force x', 'rm -rf:*',
     'git push --force', 'git push -f', 'git push --force-with-lease', 'git push origin +main',
+    'git push --force origin main', 'git push --force *', 'git push --force origin *', 'git push --force:*', 'git push origin main --force',
+    'git push -fu origin master', 'git push origin HEAD:main -f', 'git push origin +refs/heads/main:refs/heads/main',
+    'git push --force origin fix/x main', 'git -C repo push -f origin main', 'git -c a=b push --force origin "main"',
+    'git fetch && git push -f origin main', 'git push --forc origin develop', 'git push -o ci.skip -f origin main',
+    'git push --force origin rel*', 'git push --force origin release/1.0', 'git push --force origin MAIN',
+    'git push origin --delete main', 'git push origin -d master', 'git push origin :main', 'git push origin --delete *',
+    'git push --delete origin refs/heads/main', 'git push --mirror',
+    'git branch -D main', 'git branch -D *', 'git branch -d release/1.0', 'git branch --delete develop', 'git branch -D', 'git branch -dr origin/main',
     'git reset --hard', 'git clean -fd',
     'DROP DATABASE app', 'drop table users', 'TRUNCATE TABLE logs', 'dropdb app', 'redis-cli FLUSHALL', 'redis-cli flushdb',
     'aws s3 rb *', 'aws ec2 terminate-instances *', 'gcloud projects delete *', 'az group delete *', 'kubectl delete *',
@@ -408,7 +416,11 @@ describe('approvals: destructive commands (APPR-002)', () => {
   });
 
   it.each([
-    'npm test', 'npm run build', 'git status', 'git diff', 'git log *', 'git push origin main', 'git push', 'ls *', 'rm file.txt', 'rm -r build',
+    'npm test', 'npm run build', 'git status', 'git diff', 'git log *', 'git push origin main', 'git push', 'ls *',
+    'git push *', 'git push origin *', 'git push origin fix/*', 'git push --force origin fix/*', 'git push --force-with-lease origin feature/x',
+    'git push -f origin fix/x', 'git push origin +fix/x', 'git push origin --delete fix/x', 'git push origin :feature/old', 'git push --tags --force',
+    'git push origin HEAD:fix/x -f', 'git -C repo push -f origin fix/x', 'git branch -D feature/*', 'git branch -D fix/x', 'git branch', 'git branch --list *',
+    'git branch -dr origin/fix/x', 'git branch -m old new', 'rm file.txt', 'rm -r build',
     'aws s3 ls *', 'aws sts get-caller-identity', 'kubectl get pods *', 'terraform plan *', 'gcloud projects list', 'cat README.md',
   ])('%s is not destructive', (command) => {
     expect(destructiveMatch(command), command).toBeUndefined();
@@ -424,12 +436,27 @@ describe('approvals: destructive commands (APPR-002)', () => {
 
   it('flags a broad pattern by giving an example command it would allow', () => {
     expect(destructiveMatch('rm *')).toContain('recursive delete, for example `rm -rf');
-    expect(destructiveMatch('git *')).toMatch(/force push|discard local work/);
+    expect(destructiveMatch('git *')).toContain('discard local work');
+  });
+
+  it('labels force pushes and deletions of protected branches', () => {
+    expect(destructiveMatch('git push --force origin main')).toBe('force push');
+    expect(destructiveMatch('git branch -D main')).toBe('protected branch deletion');
+    expect(destructiveMatch('git push origin --delete main')).toBe('protected branch deletion');
+  });
+
+  it('protects branches from the config list on top of the defaults', () => {
+    const list = [...DEFAULT_PROTECTED_BRANCHES, 'staging', 'hotfix/*'];
+    expect(destructiveMatch('git push --force origin staging')).toBeUndefined();
+    expect(destructiveMatch('git push --force origin staging', list)).toBe('force push');
+    expect(destructiveMatch('git branch -D hotfix/1', list)).toBe('protected branch deletion');
+    expect(destructiveMatch('git push --force origin main', list)).toBe('force push');
+    expect(destructiveMatch('git push --force origin fix/x', list)).toBeUndefined();
   });
 
   it('has a label and a command for every sample, and the samples cover each family of damage', () => {
     const labels = new Set(DESTRUCTIVE_SAMPLES.map((s) => s.label));
-    expect([...labels].sort()).toEqual(['cloud resource deletion', 'database drop', 'discard local work', 'force push', 'recursive delete']);
+    expect([...labels].sort()).toEqual(['cloud resource deletion', 'database drop', 'discard local work', 'recursive delete']);
     for (const s of DESTRUCTIVE_SAMPLES) expect(s.command.length).toBeGreaterThan(0);
   });
 });

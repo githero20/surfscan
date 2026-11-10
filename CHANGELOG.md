@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- APPR-002 now flags force pushes and branch deletions only when they can reach a protected branch (`main`, `master`, `develop`, `trunk`, `production`, `release/*`). `git push *` and `git push --force origin fix/*` are no longer flagged.
+- APPR-002 now flags rules that delete a protected branch: `git push --delete`, `git push origin :branch` and `git branch -d`/`-D`.
+- New `appr.protectedBranches` config key adds more protected branches (globs allowed).
+
 ## 0.1.1 (2026-11-09)
 
 - New `deps.trustedPackages` config key: DEPS-004 skips the listed packages and says which it skipped. surfscan itself is always skipped, so depending on it no longer raises DEPS-004.

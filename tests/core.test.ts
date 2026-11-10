@@ -20,12 +20,24 @@ const f = (over: Partial<Finding>): Finding => ({
 
 describe('config', () => {
   it('applies defaults', () => {
-    expect(parseConfig('{}')).toEqual({ ignore: [], ignorePaths: [], deps: { minAgeDays: 30, trustedPackages: [] } });
+    expect(parseConfig('{}')).toEqual({
+      ignore: [],
+      ignorePaths: [],
+      deps: { minAgeDays: 30, trustedPackages: [] },
+      appr: { protectedBranches: [] },
+    });
   });
 
   it('reads all known keys', () => {
-    const c = parseConfig('{"ignore":["RULES-006"],"ignorePaths":["docs/**"],"deps":{"minAgeDays":7,"trustedPackages":["foo"]}}');
-    expect(c).toEqual({ ignore: ['RULES-006'], ignorePaths: ['docs/**'], deps: { minAgeDays: 7, trustedPackages: ['foo'] } });
+    const c = parseConfig(
+      '{"ignore":["RULES-006"],"ignorePaths":["docs/**"],"deps":{"minAgeDays":7,"trustedPackages":["foo"]},"appr":{"protectedBranches":["Staging","refs/heads/hotfix/*"]}}',
+    );
+    expect(c).toEqual({
+      ignore: ['RULES-006'],
+      ignorePaths: ['docs/**'],
+      deps: { minAgeDays: 7, trustedPackages: ['foo'] },
+      appr: { protectedBranches: ['staging', 'hotfix/*'] },
+    });
   });
 
   it('accepts a file saved with a UTF-8 byte order mark', () => {
@@ -38,6 +50,10 @@ describe('config', () => {
     ['{"ignore":"RULES-001"}', 'must be an array of strings'],
     ['{"ignore":["rules-1"]}', 'is not a rule ID'],
     ['{"deps":{"minAgeDays":-1}}', 'non-negative integer'],
+    ['{"appr":{"protected":[]}}', 'unknown key "appr.protected"'],
+    ['{"appr":{"protectedBranches":"main"}}', 'must be an array of strings'],
+    ['{"appr":{"protectedBranches":[" "]}}', 'must not contain empty names'],
+    ['{"appr":[]}', '"appr" must be an object'],
     ['[]', 'must be a JSON object'],
     ['{', 'invalid JSON'],
   ])('rejects %s', (text, message) => {

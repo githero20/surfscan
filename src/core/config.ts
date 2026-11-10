@@ -1,4 +1,4 @@
-import { stripBom } from './text.js';
+import { normalizeBranch, stripBom } from './text.js';
 import type { SurfscanConfig } from './types.js';
 
 export const CONFIG_FILE_NAME = 'surfscan.json';
@@ -7,6 +7,7 @@ export const DEFAULT_CONFIG: SurfscanConfig = {
   ignore: [],
   ignorePaths: [],
   deps: { minAgeDays: 30, trustedPackages: [] },
+  appr: { protectedBranches: [] },
 };
 
 export class ConfigError extends Error {
@@ -16,8 +17,9 @@ export class ConfigError extends Error {
   }
 }
 
-const TOP_LEVEL_KEYS = ['ignore', 'ignorePaths', 'deps'];
+const TOP_LEVEL_KEYS = ['ignore', 'ignorePaths', 'deps', 'appr'];
 const DEPS_KEYS = ['minAgeDays', 'trustedPackages'];
+const APPR_KEYS = ['protectedBranches'];
 const RULE_ID = /^[A-Z]+-\d{3}$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -52,6 +54,7 @@ export function validateConfig(raw: unknown, source = CONFIG_FILE_NAME): Surfsca
     ignore: [...DEFAULT_CONFIG.ignore],
     ignorePaths: [...DEFAULT_CONFIG.ignorePaths],
     deps: { ...DEFAULT_CONFIG.deps, trustedPackages: [...DEFAULT_CONFIG.deps.trustedPackages] },
+    appr: { protectedBranches: [...DEFAULT_CONFIG.appr.protectedBranches] },
   };
 
   if (raw.ignore !== undefined) {
@@ -85,6 +88,21 @@ export function validateConfig(raw: unknown, source = CONFIG_FILE_NAME): Surfsca
         throw new ConfigError(`${source}: "deps.trustedPackages" must not contain empty names`);
       }
       config.deps.trustedPackages = names;
+    }
+  }
+
+  if (raw.appr !== undefined) {
+    if (!isPlainObject(raw.appr)) {
+      throw new ConfigError(`${source}: "appr" must be an object`);
+    }
+    checkKeys(raw.appr, APPR_KEYS, 'appr.', source);
+    if (raw.appr.protectedBranches !== undefined) {
+      const names = stringArray(raw.appr.protectedBranches, 'appr.protectedBranches', source);
+      const normalized = names.map(normalizeBranch);
+      if (normalized.some((n) => n === '')) {
+        throw new ConfigError(`${source}: "appr.protectedBranches" must not contain empty names`);
+      }
+      config.appr.protectedBranches = normalized;
     }
   }
 

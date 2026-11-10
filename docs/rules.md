@@ -442,21 +442,31 @@ Since Claude Code v2.1.257, `bypassPermissions` and `auto` in project or local s
 
 **Bad.**
 ```json
-"allow": ["Bash(rm -rf node_modules)", "Bash(git push *)", "Bash(psql *)"]
+"allow": ["Bash(rm -rf node_modules)", "Bash(git push --force origin main)", "Bash(psql *)"]
 ```
-`Bash(git push *)` also allows `git push --force`.
 
 **Fix.** Remove the rule, or narrow it to a safe subcommand. Keep destructive commands behind a prompt, or in `deny`.
 
 **Detection.** A `Bash` or `PowerShell` allow rule is flagged when either:
 - **its text contains a destructive command:**
   - `rm -rf`
-  - `git push --force`, `-f` or `+ref`
+  - a force push (`--force`, `--force-with-lease`, `-f`, `+ref`) or a branch deletion (`git push --delete`, `git push origin :branch`, `git branch -d`/`-D`) that can reach a protected branch. See below.
   - `git reset --hard`, `git clean -f`
   - `DROP DATABASE`/`TABLE`/`SCHEMA`, `dropdb`, `FLUSHALL`
   - a cloud CLI (`aws`, `gcloud`, `az`, `kubectl`, `terraform`, `pulumi` and others) followed by `delete`, `destroy`, `terminate`, `rm` or `rb`
   - `Remove-Item -Recurse`
-- **the rule's pattern matches a sample destructive command.** Patterns follow Claude Code's wildcard rules: `*` matches any text, and a trailing ` *` or `:*` also matches the bare command. So `Bash(git push *)` matches `git push --force origin main`.
+- **the rule's pattern matches a sample destructive command.** Patterns follow Claude Code's wildcard rules: `*` matches any text, and a trailing ` *` or `:*` also matches the bare command. So `Bash(psql *)` matches `psql -c "DROP DATABASE app"`.
+
+**Protected branches.** Force pushes and branch deletions are only flagged when the rule can reach a protected branch: `main`, `master`, `develop`, `trunk`, `production` and `release/*`, plus any `appr.protectedBranches` in `surfscan.json` (globs allowed; the list adds to the built-in ones). The rule's own text must contain the force or delete form:
+
+| Rule | Flagged |
+|---|---|
+| `git push *`, `git push origin *`, `git push origin fix/*` | no |
+| `git push --force origin fix/*`, `git branch -D feature/*` | no |
+| `git push --force origin main`, `git branch -D main` | yes |
+| `git push --force *`, `git push --force`, `git branch -D *` | yes (could reach a protected branch) |
+
+A rule such as `git push *` is not flagged because it does not mention force, but it still lets the agent run `git push origin main --force`. Use branch protection on the remote to stop that.
 
 `git reset --hard` and `git clean -f` are additions to the brief. Deny and ask rules are not checked.
 
