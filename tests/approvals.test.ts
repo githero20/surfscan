@@ -35,7 +35,8 @@ describe('approvals scanner', () => {
   describe('APPR-002', () => {
     it('APPR-002 flags allow rules that cover destructive commands', async () => {
       const findings = await scan('APPR-002', 'bad');
-      expect(findings.map((f) => f.line)).toEqual([5, 6, 7, 8, 9]);
+      expect(findings.map((f) => f.line)).toEqual([5, 6, 7, 8, 9, 10]);
+      expect(findings[5]!.message).toContain('protected branch deletion');
       expect(findings[1]!.message).toContain('force push');
     });
 
@@ -105,7 +106,8 @@ describe('approvals scanner', () => {
       expect(isWildcardShell(undefined)).toBe(true);
       expect(isWildcardShell('*')).toBe(true);
       expect(isWildcardShell('npm run *')).toBe(false);
-      expect(destructiveMatch('git *')).toContain('force push');
+      expect(destructiveMatch('git *')).toContain('discard local work');
+      expect(destructiveMatch('git push *')).toBeUndefined();
       expect(destructiveMatch('kubectl delete pod *')).toBe('cloud resource deletion');
       expect(destructiveMatch('git log *')).toBeUndefined();
     });

@@ -50,6 +50,15 @@ export function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+/** Lower-case a branch name or glob and drop quotes and a `refs/heads/` prefix. */
+export function normalizeBranch(name: string): string {
+  return name
+    .trim()
+    .replace(/^["']+|["']+$/g, '')
+    .toLowerCase()
+    .replace(/^(?:refs\/)?heads\//, '');
+}
+
 /** Shorten text for display in a finding message. */
 export function excerpt(text: string, max = 80): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();

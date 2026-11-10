@@ -3,10 +3,11 @@
     "allow": [
       "Bash(npm run test *)",
       "Bash(rm -rf node_modules)",
-      "Bash(git push *)",
+      "Bash(git -C . push -f origin main)",
       "Bash(aws s3 rm *)",
       "Bash(psql *)",
-      "Bash(git push --force:*)"
+      "Bash(git push --force:*)",
+      "Bash(git branch -D main)"
     ]
   }
 }

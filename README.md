@@ -165,7 +165,8 @@ In CI, pass `--strict`. If any check could not run, surfscan exits 2 instead of 
 {
   "ignore": ["RULES-006"],
   "ignorePaths": ["vendor/**"],
-  "deps": { "minAgeDays": 30, "trustedPackages": ["my-new-lib"] }
+  "deps": { "minAgeDays": 30, "trustedPackages": ["my-new-lib"] },
+  "appr": { "protectedBranches": ["staging", "hotfix/*"] }
 }
 ```
 
@@ -173,6 +174,8 @@ In CI, pass `--strict`. If any check could not run, surfscan exits 2 instead of 
 - `ignorePaths`: globs to exclude from scanning
 - `deps.minAgeDays`: DEPS-004 threshold in days (default 30)
 - `deps.trustedPackages`: package names the DEPS-004 age check skips (surfscan itself is always skipped). Other DEPS rules still apply. A project's `surfscan.json` is controlled by whoever owns the project, so do not rely on it when scanning code you do not trust.
+
+- `appr.protectedBranches`: branches (globs allowed) that APPR-002 protects from force push and deletion, in addition to `main`, `master`, `develop`, `trunk`, `production` and `release/*`. It can only add branches, never remove the built-in ones.
 
 Unknown keys are rejected with an error.
 

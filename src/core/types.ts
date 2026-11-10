@@ -38,6 +38,10 @@ export interface SurfscanConfig {
     minAgeDays: number;
     trustedPackages: string[];
   };
+  appr: {
+    /** Extra branches (globs allowed) that APPR-002 protects from force push and deletion, on top of the built-in ones. */
+    protectedBranches: string[];
+  };
 }
 
 /**

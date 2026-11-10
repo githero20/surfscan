@@ -1,7 +1,7 @@
 import { listTargets } from '../../core/runner.js';
 import type { Finding, Rule, ScanContext, Scanner, SourceProvider, SurfscanConfig } from '../../core/types.js';
 import { claudeCodeAdapter } from './adapters/claude-code.js';
-import { destructiveMatch, isWildcardShell } from './destructive.js';
+import { DEFAULT_PROTECTED_BRANCHES, destructiveMatch, isWildcardShell } from './destructive.js';
 import type { ApprovalAdapter, ApprovalSettings } from './types.js';
 
 /** Registered agent adapters. Add new agents here. */
@@ -61,10 +61,11 @@ export const rules: Rule[] = [
     title: 'Allowlist includes destructive commands',
     check(context) {
       const out: Finding[] = [];
+      const protectedBranches = [...DEFAULT_PROTECTED_BRANCHES, ...context.config.appr.protectedBranches];
       for (const s of settingsFor(context)) {
         for (const entry of s.allow) {
           if (entry.kind !== 'shell' || isWildcardShell(entry.command)) continue;
-          const why = destructiveMatch(entry.command!);
+          const why = destructiveMatch(entry.command!, protectedBranches);
           if (!why) continue;
           out.push(
             finding(
@@ -72,7 +73,7 @@ export const rules: Rule[] = [
               s.file,
               entry.line,
               `${s.agent} runs a destructive command without asking: ${entry.raw} (${why})`,
-              'remove the rule or narrow it to a safe subcommand; keep destructive commands behind a prompt or in deny',
+              'remove the rule or narrow it to a safe subcommand; keep destructive commands behind a prompt or in deny. Force push and branch deletion are only flagged on protected branches; add more with appr.protectedBranches in surfscan.json',
             ),
           );
         }
