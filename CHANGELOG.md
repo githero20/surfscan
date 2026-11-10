@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-10)
 
 - APPR-002 now flags force pushes and branch deletions only when they can reach a protected branch (`main`, `master`, `develop`, `trunk`, `production`, `release/*`). `git push *` and `git push --force origin fix/*` are no longer flagged.
 - APPR-002 now flags rules that delete a protected branch: `git push --delete`, `git push origin :branch` and `git branch -d`/`-D`.
